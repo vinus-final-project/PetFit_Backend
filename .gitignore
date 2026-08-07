@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 설정
+.env
+
+# 저장소
+storage/
+models/*.pt
+
+# 도구
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

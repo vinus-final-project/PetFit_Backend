@@ -7,36 +7,39 @@
 객체마다 기준 프레임이 다르므로 서로 다른 객체의 좌표를 한 이미지에 함께 그리지 않는다.
 """
 
-from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, Index, Integer, Numeric, String
+from sqlalchemy import (
+    BigInteger, CheckConstraint, ForeignKey, Index, Integer, Numeric, String,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base
+from app.models.base import Base, TABLE_ARGS
 
 __all__ = ["DetectedObject"]
 
 
 class DetectedObject(Base):
-    __tablename__ = "Detected_Object"
+    __tablename__ = "detected_object"
 
     object_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     analysis_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("Analysis.analysis_id", ondelete="CASCADE"), nullable=False
+        BigInteger, ForeignKey("analysis.analysis_id", ondelete="CASCADE"), nullable=False
     )
 
     object_name: Mapped[str] = mapped_column(String(50), nullable=False)
-    confidence: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False, server_default="0")
-    detection_frame_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    confidence: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    detection_frame_count: Mapped[int] = mapped_column(Integer, nullable=False)
     risk_level: Mapped[str] = mapped_column(String(20), nullable=False, server_default="SAFE")
+    #: 기본값을 두지 않는 컬럼은 CHECK 제약이 0을 허용하지 않기 때문이다.
 
     #: 해당 객체가 가장 잘 보이는 프레임. 객체마다 다를 수 있다.
-    frame_number: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    frame_number: Mapped[int] = mapped_column(Integer, nullable=False)
     #: 위험 객체만 생성한다. SAFE는 NULL.
     marked_image_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    x: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False, server_default="0")
-    y: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False, server_default="0")
-    width: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False, server_default="0")
-    height: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False, server_default="0")
+    x: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    y: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    width: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    height: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
 
     analysis = relationship("Analysis", back_populates="detected_objects")
 
@@ -58,4 +61,5 @@ class DetectedObject(Base):
         Index("ix_detected_object_analysis", "analysis_id"),
         Index("ix_detected_object_name", "object_name"),
         Index("ix_detected_object_risk", "risk_level"),
+        TABLE_ARGS,
     )

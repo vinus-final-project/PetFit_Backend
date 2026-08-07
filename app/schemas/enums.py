@@ -16,6 +16,7 @@ __all__ = [
     "RecommendationType",
     "AnalysisItem",
     "ScoreCategory",
+    "progress_for",
 ]
 
 
@@ -146,6 +147,32 @@ _STAGE_PROGRESS = {
     AnalysisStage.SCORE_CALCULATION: 78,
     AnalysisStage.ENVIRONMENT_ANALYSIS: 82,
 }
+
+
+def progress_for(status: "AnalysisStatus", stage: "AnalysisStage | None") -> int:
+    """상태와 단계로 진행률을 산출한다.
+
+    ``progress`` 는 ``stage`` 에서 파생되는 값이므로 컬럼에 직접 대입하지 않는다.
+    저장·응답 양쪽이 이 함수를 거쳐야 두 값이 어긋나지 않는다.
+
+    Args:
+        status: 분석 상태.
+        stage: 현재 단계. PENDING·COMPLETED 에서는 None.
+
+    Returns:
+        0 이상 100 이하의 진행률.
+
+    Raises:
+        ValueError: PROCESSING 인데 단계가 없는 경우.
+    """
+    if status is AnalysisStatus.COMPLETED:
+        return 100
+    if status is AnalysisStatus.PENDING:
+        return 0
+    if status is AnalysisStatus.PROCESSING and stage is None:
+        raise ValueError("PROCESSING 상태에는 stage가 있어야 한다")
+    # FAILED는 파이프라인 진입 전 실패 시 stage가 없을 수 있다.
+    return stage.progress if stage else 0
 
 
 class RiskSource(str, Enum):

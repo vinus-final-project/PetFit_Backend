@@ -10,17 +10,19 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base
+from app.models.base import Base, TABLE_ARGS
 
 __all__ = ["Recommendation"]
 
 
 class Recommendation(Base):
-    __tablename__ = "Recommendation"
+    __tablename__ = "recommendation"
 
-    recommendation_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    recommendation_id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, autoincrement=True
+    )
     analysis_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("Analysis.analysis_id", ondelete="CASCADE"), nullable=False
+        BigInteger, ForeignKey("analysis.analysis_id", ondelete="CASCADE"), nullable=False
     )
 
     recommendation_type: Mapped[str] = mapped_column(String(30), nullable=False)
@@ -39,4 +41,5 @@ class Recommendation(Base):
         CheckConstraint("priority >= 1", name="ck_recommendation_priority"),
         UniqueConstraint("analysis_id", "priority", name="uq_recommendation_priority"),
         Index("ix_recommendation_analysis", "analysis_id"),
+        TABLE_ARGS,
     )
