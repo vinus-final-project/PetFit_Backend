@@ -1,2 +1,134 @@
-# PetFit_Backend
-사이드프로젝트로 진행중인 PetFit의 backend 레포지토리입니다.
+# PetFit Backend
+
+영상 기반 AI 반려동물 생활환경 분석 서비스의 백엔드.
+
+설계 문서는 별도 저장소의 `markdown/` 을 따른다. 구현과 문서가 어긋나면 문서를 먼저 고친다.
+
+---
+
+## 요구 사항
+
+| 항목 | 버전 | 비고 |
+| --- | --- | --- |
+| Python | **3.10 고정** | 상위 버전으로 개발하지 않는다 |
+| MySQL | **8.0.16 이상** | 미만은 CHECK 제약을 무시한다 |
+
+### Python 3.10을 고정하는 이유
+
+3.11 이상에서 개발하면 `asyncio.timeout` · `TaskGroup` · `StrEnum` · `datetime.UTC` 같은 상위 버전 전용 기능을 써도 **본인 환경에서는 통과한다.** 그 코드는 3.10을 쓰는 다른 팀원 환경에서만 깨지므로 발견이 늦어진다.
+
+`python -m pytest` 는 다른 버전에서 실행하면 경고를 낸다.
+
+---
+
+## 설치
+
+```bash
+py -3.10 -m venv .venv
+.venv\Scripts\Activate.ps1        # Windows PowerShell
+source .venv/bin/activate         # macOS / Linux
+
+pip install -r requirements.txt
+```
+
+버전 확인.
+
+```bash
+python -V     # Python 3.10.x
+```
+
+`3.10` 이 아니면 가상환경을 지우고 다시 만든다.
+
+```bash
+deactivate
+Remove-Item -Recurse -Force .venv    # Windows
+rm -rf .venv                         # macOS / Linux
+```
+
+---
+
+## 환경 변수
+
+`.env` 는 저장소에 없다. 각자 만든다.
+
+```
+APP_NAME=PetFit
+DEBUG=false
+
+DB_USER=petfit
+DB_PASSWORD=
+DB_HOST=localhost
+DB_PORT=3306
+DB_NAME=petfit
+
+STORAGE_ROOT=./storage
+YOLO_MODEL_PATH=./models/yolo.pt
+LLM_PROVIDER=qwen
+LLM_API_KEY=
+```
+
+`DATABASE_URL` 을 지정하면 위 `DB_*` 보다 우선한다. 컨테이너 배포용이며 보통은 비워둔다.
+
+---
+
+## 데이터베이스
+
+```bash
+python -m scripts.init_db          # 스키마·테이블 생성 후 검증
+python -m scripts.init_db --check  # 생성하지 않고 상태만 확인
+python -m scripts.init_db --drop   # 전체 삭제 후 재생성 (개발 전용)
+```
+
+검증 항목은 MySQL 버전, 세션 타임존, 테이블·인덱스·외래키다.
+
+### 시각은 KST로 저장한다
+
+`DATETIME(6)` 에 KST(UTC+9) 기준으로 저장하고, API 응답에 `+09:00` 오프셋을 붙인다.
+
+`CURRENT_TIMESTAMP(6)` 는 세션 타임존을 따르므로 연결 시점에 `+09:00` 으로 고정한다. 고정하지 않으면 서버 OS 설정에 따라 값이 달라지고, **오류 없이 조용히 9시간 어긋난다.**
+
+### 스키마 정본은 모델이다
+
+`migrations/001_initial.sql` 은 파생물이므로 직접 수정하지 않는다.
+
+```bash
+python -m scripts.gen_ddl > migrations/001_initial.sql
+```
+
+---
+
+## 테스트
+
+```bash
+python -m pytest
+```
+
+MySQL 서버가 없어도 실행된다. 서비스 계층 테스트는 SQLite 인메모리 DB를 쓰되 **모델의 CHECK 제약을 그대로 적용**한다.
+
+---
+
+## 구조
+
+| 디렉터리 | 내용 | 담당 |
+| --- | --- | --- |
+| `app/utils/` | 반올림, 좌표 압축 면적, 시각 처리 | 공용 |
+| `app/rules/` | 중요도, 공간별 적용, 감점률, 위험도 판정 | 공용 |
+| `app/schemas/` | Enum, API 요청·응답 DTO | 공용 |
+| `app/models/` `app/db/` | 테이블, 제약, 세션 | 백엔드 B |
+| `app/services/` | 저장소, 상태 전이, 큐 | 백엔드 B |
+| `app/api/` `app/main.py` | 라우터, 예외 핸들러 | 백엔드 A |
+| `app/ai/` | 분석 파이프라인 12단계 | AI |
+
+`app/ai/pipeline.py` 가 서비스 계층과 AI 계층의 경계다. 서비스는 이 계약만 알고, AI는 이 계약만 지킨다.
+
+---
+
+## 규칙
+
+| 항목 | 내용 |
+| --- | --- |
+| 브랜치 | 개인 브랜치에서 작업 후 `main` 으로 병합 |
+| 커밋 전 | `git status` 에 `.venv/` 가 뜨면 안 된다 |
+| `requirements.txt` | **ASCII만 사용한다.** 구버전 pip가 한국어 Windows에서 비ASCII 문자를 읽지 못한다 |
+| 점수 산출 | 규칙 기반이다. 생성형 AI는 점수를 만들지 않는다 |
+| `progress` | `stage` 에서 파생된다. `progress_for()` 를 거치고 직접 대입하지 않는다 |
