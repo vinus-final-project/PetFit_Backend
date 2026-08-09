@@ -27,9 +27,16 @@ BOX = BoundingBox(0.2, 0.2, 0.3, 0.3)
 
 
 def frames(count: int = 25) -> list[Frame]:
-    """검증용 프레임. 이미지 내용은 쓰지 않으므로 작게 만든다."""
+    """검증용 프레임. 이미지 내용은 쓰지 않으므로 작게 만든다.
+
+    **번호는 1부터다.** 추출기가 그렇게 매긴다. 0부터 만들면 실제와 다른 조건에서
+    시험하게 되어, 기준 장면의 탐지 프레임 수가 어긋난다.
+    """
     image = Image.new("RGB", (16, 9))
-    return [Frame(number=i, timestamp=i * 0.33, image=image) for i in range(count)]
+    return [
+        Frame(number=i, timestamp=i * 0.33, image=image)
+        for i in range(1, count + 1)
+    ]
 
 
 class TestContract:
@@ -86,7 +93,7 @@ class TestContract:
     def test_threshold_is_the_documented_value(self) -> None:
         """기본 임계값이 상수와 같아야 한다. 실제 모델의 conf 인자와 동일한 값이다."""
         detector = StubDetector([
-            PlantedObject("sofa", BOX, frames=[0], confidence=DETECTION_CONFIDENCE),
+            PlantedObject("sofa", BOX, frames=[1], confidence=DETECTION_CONFIDENCE),
         ])
         assert len(detector.detect(frames(1))[0]) == 1
 
@@ -154,7 +161,7 @@ class TestPlantedObject:
 
     def test_frames_outside_range_are_ignored(self) -> None:
         """추출 범위 밖에 심어도 예외가 나지 않는다."""
-        detector = StubDetector([PlantedObject("sofa", BOX, frames=[0, 99])])
+        detector = StubDetector([PlantedObject("sofa", BOX, frames=[1, 99])])
         result = detector.detect(frames(3))
         assert len(result) == 3
         assert len(result[0]) == 1

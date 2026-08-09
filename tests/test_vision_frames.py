@@ -80,9 +80,15 @@ class TestExtract:
         result = extract(make_video(seconds=6.0))
         assert result.duration == pytest.approx(6.0, abs=0.2)
 
-    def test_frames_are_numbered_from_zero(self, make_video) -> None:
+    def test_frames_are_numbered_from_one(self, make_video) -> None:
+        """**0이 아니라 1부터다.**
+
+        DB의 ``ck_detected_object_frame_number`` 가 1 이상을 요구한다. 0부터
+        매기면 첫 프레임을 대표로 삼은 객체가 저장 단계에서 제약에 걸려
+        분석 전체가 실패한다.
+        """
         frames = extract(make_video()).frames
-        assert [f.number for f in frames] == list(range(len(frames)))
+        assert [f.number for f in frames] == list(range(1, len(frames) + 1))
 
     def test_timestamps_ascend(self, make_video) -> None:
         stamps = [f.timestamp for f in extract(make_video()).frames]
