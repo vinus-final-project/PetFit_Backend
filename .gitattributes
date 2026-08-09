@@ -1,0 +1,23 @@
+# 줄바꿈을 저장소 안에서 LF로 통일한다.
+#
+# 설정이 없으면 편집기·OS에 따라 CRLF와 LF가 섞이고, 내용이 하나도 바뀌지 않았는데도
+# 파일 전체가 변경된 것처럼 보인다. 여러 명이 작업하면 PR 리뷰가 사실상 불가능해진다.
+
+* text=auto eol=lf
+
+# Windows 전용 스크립트는 CRLF를 유지한다. LF면 실행되지 않는다.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# 바이너리 — 줄바꿈 변환 대상이 아니다.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.mp4  binary
+*.pt   binary
+*.onnx binary
+*.pdf  binary
+*.zip  binary

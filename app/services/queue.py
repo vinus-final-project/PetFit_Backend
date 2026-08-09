@@ -15,6 +15,8 @@
 
 import asyncio
 import logging
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 
 from app.ai.pipeline import Pipeline, PipelineError
@@ -46,6 +48,8 @@ class AnalysisQueue:
         concurrency: 동시 처리 수.
         capacity: 대기 가능한 최대 작업 수. 처리 중인 것을 포함한다.
         timeout: 작업 1건의 제한 시간(초).
+        session_factory: DB 세션 컨텍스트를 만드는 호출 가능 객체.
+            기본값은 운영 세션이며, 테스트는 인메모리 세션을 주입한다.
     """
 
     def __init__(
@@ -55,12 +59,15 @@ class AnalysisQueue:
         concurrency: int = MAX_CONCURRENT_ANALYSIS,
         capacity: int = MAX_QUEUE_SIZE,
         timeout: float = PROCESSING_TIMEOUT_SECONDS,
+        session_factory: Callable[[], AbstractAsyncContextManager] = session_scope,
     ) -> None:
         self._pipeline = pipeline
         self._storage = storage
         self._semaphore = asyncio.Semaphore(concurrency)
         self._capacity = capacity
         self._timeout = timeout
+        # 세션 생성을 주입받는다. 고정하면 MySQL 서버 없이 테스트할 수 없다.
+        self._session_factory = session_factory
         self._pending = 0
         self._tasks: set[asyncio.Task] = set()
 
@@ -123,7 +130,7 @@ class AnalysisQueue:
         failure: tuple[str, AnalysisStage | None] | None = None
 
         async def on_stage(stage: AnalysisStage) -> None:
-            async with session_scope() as session:
+            async with self._session_factory() as session:
                 service = AnalysisService(session, self._storage)
                 row = await service.get_internal(analysis_id)
                 if row is not None:
@@ -146,7 +153,7 @@ class AnalysisQueue:
             logger.exception("분석 %s 파이프라인 예외", analysis_id)
             failure = (INTERNAL_MESSAGE, None)
 
-        async with session_scope() as session:
+        async with self._session_factory() as session:
             service = AnalysisService(session, self._storage)
             row = await service.get_internal(analysis_id)
             if row is None:
