@@ -21,7 +21,14 @@ from PIL.Image import Image
 from app.ai.pipeline import DetectedObject
 from app.utils.geometry import BoundingBox
 
-__all__ = ["Frame", "Detection", "TrackedObject", "VisionResult", "ImageSink"]
+__all__ = [
+    "Frame",
+    "Detection",
+    "TrackedObject",
+    "VisionResult",
+    "ImageSink",
+    "ImageStore",
+]
 
 
 @runtime_checkable
@@ -31,11 +38,24 @@ class ImageSink(Protocol):
     AI 계층이 서비스 계층의 ``Storage`` 를 직접 임포트하지 않기 위한 계약이다.
     임포트하면 의존 방향이 뒤집혀, 저장소를 고칠 때마다 파이프라인이 영향을 받는다.
 
-    파이프라인이 저장소에서 필요로 하는 것은 이 메서드 하나뿐이다.
+    Vision 이 저장소에서 필요로 하는 것은 이 메서드 하나뿐이다.
     """
 
     def save_image(self, image: Image) -> str:
         """이미지를 저장하고 DB 저장용 상대 경로를 돌려준다."""
+        ...
+
+
+@runtime_checkable
+class ImageStore(ImageSink, Protocol):
+    """저장과 삭제가 모두 필요한 대상.
+
+    Vision 이 이미지를 만든 뒤 환경 분석에서 실패하면, 만든 파일이 DB 참조 없이
+    디스크에 남는다. 실패 경로에서 지우려면 삭제까지 필요하다.
+    """
+
+    def delete(self, *relative_paths: "str | None") -> int:
+        """상대 경로로 지정한 파일을 삭제하고 삭제된 수를 돌려준다."""
         ...
 
 
@@ -152,6 +172,14 @@ class VisionResult:
     frame_count: int
     occupancy_ratio: float
     thumbnail_path: str
+
+    #: 분석 대표 프레임의 번호.
+    #:
+    #: ``analysis_frames[0].number`` 와 같지만 명시해 둔다. 12단계가 이 값을
+    #: 입력으로 받는데, "목록의 첫 번째가 대표" 라는 규칙을 주석으로만 두면
+    #: 목록 구성이 바뀌었을 때 조용히 다른 프레임을 가리키게 된다.
+    thumbnail_frame: int = 0
+
     detected_objects: Sequence[DetectedObject] = field(default_factory=tuple)
 
     #: 환경 분석(12단계) 입력용 원본 프레임. **마킹하지 않은 것이어야 한다.**

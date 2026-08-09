@@ -144,6 +144,7 @@ class VisionPipeline:
             frame_count=video.count,
             occupancy_ratio=occupancy,
             thumbnail_path=visuals.thumbnail_path,
+            thumbnail_frame=analysis_frame.number,
             detected_objects=tuple(visuals.detected_objects),
             analysis_frames=tuple(visuals.analysis_frames),
         )

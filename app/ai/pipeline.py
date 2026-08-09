@@ -17,7 +17,7 @@
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from app.schemas.enums import (
     AnalysisStage,
@@ -139,6 +139,7 @@ class PipelineResult:
 StageCallback = Callable[[AnalysisStage], Awaitable[None]]
 
 
+@runtime_checkable
 class Pipeline(Protocol):
     """AI 분석 파이프라인.
 
