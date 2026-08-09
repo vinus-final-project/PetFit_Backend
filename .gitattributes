@@ -1,23 +1,54 @@
-# 줄바꿈을 저장소 안에서 LF로 통일한다.
+# 줄바꿈 정규화
 #
-# 설정이 없으면 편집기·OS에 따라 CRLF와 LF가 섞이고, 내용이 하나도 바뀌지 않았는데도
-# 파일 전체가 변경된 것처럼 보인다. 여러 명이 작업하면 PR 리뷰가 사실상 불가능해진다.
+# 저장소에는 항상 LF로 저장한다. 작업 트리는 각자의 core.autocrlf 설정을 따르므로
+# Windows에서는 CRLF로, macOS/Linux에서는 LF로 체크아웃된다.
+#
+# 이 파일이 없으면 팀원마다 core.autocrlf 설정이 달라, 내용이 같은 파일도
+# 전체가 변경된 것처럼 보인다. 백엔드는 Windows, AI는 macOS(Mac Studio)로
+# 작업하므로 실제로 발생할 수 있다.
+#
+# 작업 트리 줄바꿈을 강제(eol=lf)하지 않는 이유는, 기존 파일이 전부 수정된 것처럼
+# 보이는 상태를 만들기 때문이다. 예방하려는 증상을 그대로 일으킨다.
 
-* text=auto eol=lf
+* text=auto
 
-# Windows 전용 스크립트는 CRLF를 유지한다. LF면 실행되지 않는다.
-*.bat  text eol=crlf
-*.cmd  text eol=crlf
-*.ps1  text eol=crlf
+# --- 텍스트 ---
+*.py     text
+*.md     text
+*.txt    text
+*.sql    text
+*.ini    text
+*.cfg    text
+*.toml   text
+*.yml    text
+*.yaml   text
+*.json   text
+*.env    text
 
-# 바이너리 — 줄바꿈 변환 대상이 아니다.
-*.png  binary
-*.jpg  binary
-*.jpeg binary
-*.gif  binary
-*.ico  binary
-*.mp4  binary
-*.pt   binary
-*.onnx binary
-*.pdf  binary
-*.zip  binary
+# --- 실행 스크립트는 줄바꿈이 고정되어야 한다 ---
+# 배치 파일이 LF면 Windows에서 실행되지 않는다.
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
+*.ps1    text eol=crlf
+# 셸 스크립트가 CRLF면 macOS/Linux에서 실행되지 않는다.
+*.sh     text eol=lf
+
+# --- 이진 파일 ---
+# 줄바꿈을 변환하면 파일이 손상된다.
+# 학습 가중치와 업로드 영상은 .gitignore 대상이지만, 실수로 추가되는 경우를 막는다.
+*.pt     binary
+*.pth    binary
+*.onnx   binary
+*.mp4    binary
+*.mov    binary
+*.jpg    binary
+*.jpeg   binary
+*.png    binary
+*.gif    binary
+*.webp   binary
+*.ico    binary
+*.zip    binary
+*.pdf    binary
+*.xlsx   binary
+*.pptx   binary
+*.docx   binary
