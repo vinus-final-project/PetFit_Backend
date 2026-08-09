@@ -136,17 +136,19 @@ class PlantedObject:
 #: ``app.ai.stub.StubPipeline`` 과 같은 5개 객체다. Vision 파이프라인이 이 장면을
 #: 처리하면 소형견·거실 기준 종합 56점이 나와야 한다. AI 분석 정의서의 계산
 #: 예시와 같은 값이므로, 파이프라인 전체가 규칙과 어긋나지 않았는지 확인할 수 있다.
+#:
+#: 프레임 번호는 **1부터** 다. 추출기가 그렇게 매기며, DB 제약도 1 이상을 요구한다.
 DEFAULT_SCENE: tuple[PlantedObject, ...] = (
     PlantedObject("cable", BoundingBox(0.1250, 0.7400, 0.2000, 0.0800),
-                  frames=range(0, 12), confidence=0.94, jitter=0.004),
+                  frames=range(1, 13), confidence=0.94, jitter=0.004),
     PlantedObject("window", BoundingBox(0.6000, 0.1000, 0.2500, 0.4000),
-                  frames=range(14, 23), confidence=0.91, jitter=0.004),
+                  frames=range(15, 24), confidence=0.91, jitter=0.004),
     PlantedObject("carpet", BoundingBox(0.2000, 0.5500, 0.5000, 0.3000),
-                  frames=range(0, 15), confidence=0.89, jitter=0.004),
+                  frames=range(1, 16), confidence=0.89, jitter=0.004),
     PlantedObject("sofa", BoundingBox(0.4000, 0.3500, 0.3500, 0.2500),
-                  frames=range(0, 21), confidence=0.98, jitter=0.004),
+                  frames=range(1, 22), confidence=0.98, jitter=0.004),
     PlantedObject("water_dispenser", BoundingBox(0.8000, 0.6500, 0.1000, 0.1200),
-                  frames=range(20, 24), confidence=0.86, jitter=0.004),
+                  frames=range(21, 25), confidence=0.86, jitter=0.004),
 )
 
 

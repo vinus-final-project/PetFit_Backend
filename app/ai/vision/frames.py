@@ -176,7 +176,10 @@ def _collect(
                 continue
             picked.append(
                 Frame(
-                    number=len(picked),
+                    # **1부터 매긴다.** DB의 ck_detected_object_frame_number 가
+                    # 1 이상을 요구한다. 0부터 매기면 첫 프레임을 대표로 삼은
+                    # 객체가 저장 단계에서 제약에 걸려 분석 전체가 실패한다.
+                    number=len(picked) + 1,
                     timestamp=float(seconds),
                     image=_prepare(decoded.to_image(), rotation, max_edge),
                 )
