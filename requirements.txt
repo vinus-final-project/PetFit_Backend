@@ -32,6 +32,7 @@ cryptography>=42.0           # required for MySQL 8.0 default auth (caching_sha2
 
 # --- Media ---
 av>=13.0                     # video probing (duration, codec); bundles ffmpeg, no external binary needed
+Pillow>=10.4                 # frame images and bounding box drawing; av.VideoFrame.to_image() returns PIL
 
 # --- Dev and test ---
 pytest>=8.3

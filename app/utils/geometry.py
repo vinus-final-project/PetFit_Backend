@@ -10,7 +10,7 @@
 
 from typing import Iterable, NamedTuple
 
-__all__ = ["BoundingBox", "union_area"]
+__all__ = ["BoundingBox", "union_area", "intersection_area", "iou"]
 
 
 class BoundingBox(NamedTuple):
@@ -83,3 +83,51 @@ def union_area(boxes: Iterable[BoundingBox]) -> float:
             if any(b.contains(cx, cy) for b in boxes):
                 total += (xs[i + 1] - xs[i]) * (ys[j + 1] - ys[j])
     return total
+
+
+def intersection_area(a: BoundingBox, b: BoundingBox) -> float:
+    """두 박스가 겹치는 면적.
+
+    Args:
+        a, b: 정규화 좌표 Bounding Box.
+
+    Returns:
+        겹치는 면적. 닿기만 하거나 떨어져 있으면 0.0.
+
+    Examples:
+        >>> round(intersection_area(BoundingBox(0, 0, 0.4, 0.4),
+        ...                         BoundingBox(0.2, 0.2, 0.4, 0.4)), 4)
+        0.04
+    """
+    width = min(a.right, b.right) - max(a.x, b.x)
+    height = min(a.bottom, b.bottom) - max(a.y, b.y)
+    if width <= 0 or height <= 0:
+        return 0.0
+    return width * height
+
+
+def iou(a: BoundingBox, b: BoundingBox) -> float:
+    """두 박스의 IoU(Intersection over Union).
+
+    객체 추적이 "같은 물체인가" 를 판정하는 근거다. 면적 비율이므로 박스 크기에
+    무관하게 0.0~1.0 으로 비교할 수 있다.
+
+    Args:
+        a, b: 정규화 좌표 Bounding Box.
+
+    Returns:
+        0.0 이상 1.0 이하. 두 박스 중 하나라도 면적이 0이면 0.0.
+
+    Examples:
+        >>> box = BoundingBox(0.1, 0.1, 0.4, 0.4)
+        >>> iou(box, box)
+        1.0
+        >>> iou(box, BoundingBox(0.7, 0.7, 0.2, 0.2))
+        0.0
+    """
+    overlap = intersection_area(a, b)
+    if overlap <= 0:
+        return 0.0
+
+    combined = a.area + b.area - overlap
+    return overlap / combined if combined > 0 else 0.0

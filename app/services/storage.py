@@ -23,6 +23,11 @@ from app.core.constants import (
     VIDEO_MIN_SECONDS,
 )
 from app.core.exceptions import ErrorCode, PetFitError
+from app.utils.video import duration_seconds
+
+#: 저장 이미지 품질. 화면 표시용이라 원본 품질이 필요하지 않다.
+#: 분석 1건이 최대 12장을 만들므로 용량이 그대로 저장소 사용량이 된다.
+IMAGE_QUALITY = 85
 
 __all__ = ["VideoInfo", "Storage", "ALLOWED_CODECS"]
 
@@ -120,7 +125,7 @@ class Storage:
                 width = stream.codec_context.width
                 height = stream.codec_context.height
 
-                duration = _duration_seconds(container, stream)
+                duration = duration_seconds(container, stream)
         except PetFitError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -185,15 +190,26 @@ class Storage:
         """이미지 파일명을 DB 저장용 상대 경로로 바꾼다."""
         return f"/images/{filename}"
 
+    def save_image(self, image) -> str:
+        """이미지를 저장하고 DB 저장용 상대 경로를 돌려준다.
 
-def _duration_seconds(container, stream) -> float | None:
-    """영상 길이를 초 단위로 구한다.
+        마킹 이미지와 대표 프레임이 이 경로로 저장된다. 파일명은 UUID이며
+        원본 파일명을 쓰지 않는다. 삭제·재시도 시 정리는 ``delete()`` 가 맡으므로
+        저장도 여기에 두어야 경로 규칙이 한곳에 남는다.
 
-    컨테이너 길이를 우선 쓰고, 없으면 스트림 값으로 대체한다.
-    스트림에만 길이가 있는 파일이 있다.
-    """
-    if container.duration is not None:
-        return container.duration / av.time_base
-    if stream.duration is not None and stream.time_base:
-        return float(stream.duration * stream.time_base)
-    return None
+        디스크에 쓰는 블로킹 호출이다. 호출하는 쪽이 스레드에서 실행한다.
+
+        Args:
+            image: PIL 이미지.
+
+        Returns:
+            ``/images/<uuid>.jpg`` 형식의 상대 경로.
+        """
+        filename = f"{uuid4()}.jpg"
+
+        # JPEG 는 투명도를 지원하지 않는다. RGB 가 아닌 이미지는 저장이 실패한다.
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+
+        image.save(self.image_dir / filename, "JPEG", quality=IMAGE_QUALITY, optimize=True)
+        return self.image_path(filename)

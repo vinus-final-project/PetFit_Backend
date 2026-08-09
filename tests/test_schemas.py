@@ -4,7 +4,7 @@ API 명세서의 예시 JSON을 기준값으로 삼는다.
 필드명·타입·정렬·시각 형식이 어긋나면 프론트엔드 연동이 깨진다.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -21,7 +21,6 @@ from app.schemas.analysis import (
     DetectedObjectOut,
     ErrorResponse,
     Pagination,
-    PetFitScoreOut,
     RiskFactorOut,
     SpaceListResponse,
     sort_detected_objects,
@@ -29,7 +28,6 @@ from app.schemas.analysis import (
     validate_device_id,
 )
 from app.schemas.enums import AnalysisStatus, RiskLevel, RiskSource
-from app.utils.timeutil import KST, to_iso
 
 DEVICE_ID = "3f2b8c10-9d7e-4a51-8f6c-2e4b7a9d0c35"
 

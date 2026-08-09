@@ -1,0 +1,27 @@
+# PetFit object detection dependencies
+#
+#   pip install -r requirements.txt -r requirements-ai.txt
+#
+# Kept separate from requirements.txt on purpose.
+# torch pulls 1-2GB. The API layer, the service layer and the whole test suite
+# run without it, because the detector sits behind the Detector protocol and
+# StubDetector covers every stage except inference itself.
+#
+# Install this only on the machine that runs the model (Mac Studio).
+#
+# NOTE: Keep this file ASCII-only.
+# Older pip (< 23) decodes requirements files using the system locale
+# (cp949 on Korean Windows) and fails on non-ASCII characters.
+
+# --- Object detection ---
+# Ships YOLO, tracking (BoT-SORT / ByteTrack) and open-vocabulary models
+# behind a single API. Pulls torch and torchvision.
+ultralytics>=8.3
+
+# --- Apple Silicon ---
+# torch selects the MPS backend automatically on macOS arm64.
+# Set YOLO_DEVICE=mps in .env to make it explicit.
+#
+# On Windows or Linux without a GPU, install the CPU wheel first to avoid
+# downloading the CUDA build:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu

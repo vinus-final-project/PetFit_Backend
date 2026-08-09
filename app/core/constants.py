@@ -5,8 +5,9 @@ DB CHECK 제약에는 포함하지 않는다. 값이 바뀔 때마다 스키마 
 """
 
 __all__ = [
-    "FRAME_RATE", "FRAME_MIN", "FRAME_MAX",
+    "FRAME_RATE", "FRAME_MIN", "FRAME_MAX", "FRAME_MAX_EDGE",
     "DETECTION_CONFIDENCE", "ADOPTION_CONFIDENCE", "MIN_DETECTION_FRAMES",
+    "TRACKING_IOU_THRESHOLD",
     "OCCUPANCY_THRESHOLDS",
     "VIDEO_MAX_BYTES", "VIDEO_MIN_SECONDS", "VIDEO_MAX_SECONDS",
     "PROCESSING_TIMEOUT_SECONDS", "MAX_RETRY_COUNT",
@@ -19,6 +20,10 @@ __all__ = [
 FRAME_RATE = 3
 FRAME_MIN = 15
 FRAME_MAX = 30
+#: 보관하는 프레임의 긴 변 픽셀 상한.
+#: 추론은 640 letterbox 이고 마킹 이미지는 화면 표시용이라 이 정도면 충분하다.
+#: 4K 원본을 그대로 들고 있으면 30장에 700MB가 넘어 동시 처리에서 메모리가 터진다.
+FRAME_MAX_EDGE = 1280
 
 # --- 탐지 신뢰 기준 ------------------------------------------------------
 #: 프레임 단위 탐지 임계값
@@ -27,6 +32,15 @@ DETECTION_CONFIDENCE = 0.25
 ADOPTION_CONFIDENCE = 0.40
 #: 채택에 필요한 최소 탐지 프레임 수
 MIN_DETECTION_FRAMES = 2
+
+# --- 객체 추적 -----------------------------------------------------------
+#: 같은 물체로 볼 최소 IoU.
+#:
+#: **실측되지 않은 값이다.** 초당 3프레임이라 프레임 간격이 0.33초이고, 카메라가
+#: 방을 훑는 중이면 같은 물체의 박스가 크게 이동한다. 높이면 하나의 소파가 여러
+#: 건으로 나열되고, 낮추면 나란히 놓인 의자 두 개가 하나로 합쳐진다.
+#: 점수는 존재 여부로 판정하므로 과합침보다 미합침이 눈에 띈다.
+TRACKING_IOU_THRESHOLD = 0.30
 
 # --- 활동 공간 점유율 ----------------------------------------------------
 #: (임계값, 감점률). 오름차순으로 평가하며 초과 시 1.0을 적용한다.

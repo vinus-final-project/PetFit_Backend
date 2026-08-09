@@ -63,7 +63,15 @@ class Settings(BaseSettings):
     )
 
     # --- AI ---------------------------------------------------------------
-    yolo_model_path: Path = Field(default=Path("./models/yolo.pt"))
+    yolo_model_path: Path = Field(
+        default=Path("./models/yolo26m.pt"),
+        description="탐지 모델 가중치. 커스텀 학습본으로 교체할 때 이 값만 바꾼다.",
+    )
+    yolo_device: str | None = Field(
+        default=None,
+        description="mps | cuda | cpu. 미지정 시 ultralytics 가 자동 선택한다. "
+        "Mac Studio 는 mps, 개발 PC 는 cpu 로 두면 된다.",
+    )
     llm_provider: str = Field(default="qwen", description="qwen | openai")
     llm_api_key: str | None = None
 

@@ -45,6 +45,16 @@ Remove-Item -Recurse -Force .venv    # Windows
 rm -rf .venv                         # macOS / Linux
 ```
 
+### 객체 탐지 모델을 돌리는 경우에만
+
+```bash
+pip install -r requirements-ai.txt
+```
+
+**모델을 실행하는 장비에만 설치한다.** `torch` 가 1~2GB 를 차지한다.
+탐지기는 `Detector` 규약 뒤에 있고 나머지 단계는 `StubDetector` 로 검증되므로,
+API 개발·서비스 개발·테스트 전부 이것 없이 돌아간다.
+
 ---
 
 ## 환경 변수
@@ -62,7 +72,8 @@ DB_PORT=3306
 DB_NAME=petfit
 
 STORAGE_ROOT=./storage
-YOLO_MODEL_PATH=./models/yolo.pt
+YOLO_MODEL_PATH=./models/yolo26m.pt
+YOLO_DEVICE=                      # mps | cuda | cpu. 비우면 자동 선택
 LLM_PROVIDER=qwen
 LLM_API_KEY=
 ```
@@ -117,9 +128,12 @@ MySQL 서버가 없어도 실행된다. 서비스 계층 테스트는 SQLite 인
 | `app/models/` `app/db/` | 테이블, 제약, 세션 | 백엔드 B |
 | `app/services/` | 저장소, 상태 전이, 큐 | 백엔드 B |
 | `app/api/` `app/main.py` | 라우터, 예외 핸들러 | 백엔드 A |
-| `app/ai/` | 분석 파이프라인 12단계 | AI |
+| `app/ai/` | 파이프라인 계약, 점수 산출, 스텁 | 공용 |
+| `app/ai/vision/` | 영상 처리·탐지·추적·시각화 (1~10단계) | AI C |
 
 `app/ai/pipeline.py` 가 서비스 계층과 AI 계층의 경계다. 서비스는 이 계약만 알고, AI는 이 계약만 지킨다.
+
+`app/ai/vision/detector.py` 의 `Detector` 가 모델과의 경계다. 실제 YOLO 구현을 추가할 때 나머지 파일은 수정하지 않는다. 성능평가 전에도 `StubDetector` 로 전 구간을 검증할 수 있다.
 
 ---
 

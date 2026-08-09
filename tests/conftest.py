@@ -61,3 +61,36 @@ def storage(tmp_path):
     from app.services.storage import Storage
 
     return Storage(tmp_path / "storage")
+
+
+@pytest.fixture
+def make_video(tmp_path):
+    """검증용 H.264 영상을 만든다.
+
+    프레임 추출은 실제 파일을 열어봐야 확인할 수 있다. 가짜 객체로 대신하면
+    컨테이너·타임스탬프·회전 처리를 하나도 시험하지 못한다.
+
+    프레임마다 색을 바꾼다. 어느 시각의 프레임이 뽑혔는지 픽셀로 확인할 수 있다.
+    """
+    import av
+    from PIL import Image
+
+    def _make(name="clip.mp4", seconds=5.0, fps=30, width=640, height=360):
+        path = tmp_path / name
+        total = max(int(round(seconds * fps)), 1)
+
+        with av.open(str(path), "w") as container:
+            stream = container.add_stream("libx264", rate=fps)
+            stream.width, stream.height = width, height
+            stream.pix_fmt = "yuv420p"
+
+            for i in range(total):
+                # 붉은 성분이 시간에 비례해 증가한다. 프레임 식별용.
+                image = Image.new("RGB", (width, height), (i * 255 // total, 60, 160))
+                container.mux(stream.encode(av.VideoFrame.from_image(image)))
+
+            container.mux(stream.encode(None))
+
+        return path
+
+    return _make

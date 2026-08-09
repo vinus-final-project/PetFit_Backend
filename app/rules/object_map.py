@@ -4,7 +4,9 @@ YOLO는 영문 클래스 코드를 출력하고 데이터베이스와 API는 한
 매핑표에 없는 코드는 저장하지 않고 무시한다.
 """
 
-__all__ = ["OBJECT_NAMES", "CUSTOM_TRAINED", "to_korean", "is_known"]
+__all__ = [
+    "OBJECT_NAMES", "CUSTOM_TRAINED", "PRIMARY_OBJECTS", "to_korean", "is_known",
+]
 
 #: 클래스 코드 → 한글 객체명 (탐지 대상 12종)
 OBJECT_NAMES: dict[str, str] = {
