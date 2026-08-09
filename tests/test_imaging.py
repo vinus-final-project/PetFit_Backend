@@ -296,3 +296,41 @@ class TestSaveImage:
         path = storage.save_image(Image.new("RGB", (10, 10)))
         assert storage.delete(path) == 1
         assert not (storage.image_dir / path.split("/")[-1]).exists()
+
+
+class TestListImages:
+    """고아 파일 회수의 재료."""
+
+    def test_lists_saved_images(self, storage) -> None:
+        paths = {storage.save_image(Image.new("RGB", (10, 10))) for _ in range(3)}
+        assert set(storage.list_images()) == paths
+
+    def test_returns_relative_paths(self, storage) -> None:
+        storage.save_image(Image.new("RGB", (10, 10)))
+        assert all(p.startswith("/images/") for p in storage.list_images())
+
+    def test_empty_directory(self, storage) -> None:
+        assert storage.list_images() == []
+
+    def test_age_filter_excludes_new_files(self, storage) -> None:
+        """방금 만든 파일을 고아로 오인하면 진행 중인 분석이 깨진다.
+
+        마킹 이미지는 DB에 기록되기 전에 먼저 디스크에 쓰인다.
+        """
+        storage.save_image(Image.new("RGB", (10, 10)))
+        assert storage.list_images(min_age_seconds=60) == []
+
+    def test_age_filter_includes_old_files(self, storage) -> None:
+        import os
+        import time
+
+        path = storage.save_image(Image.new("RGB", (10, 10)))
+        target = storage.image_dir / path.split("/")[-1]
+        old = time.time() - 3600
+        os.utime(target, (old, old))
+
+        assert storage.list_images(min_age_seconds=60) == [path]
+
+    def test_ignores_directories(self, storage) -> None:
+        (storage.image_dir / "sub").mkdir()
+        assert storage.list_images() == []

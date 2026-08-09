@@ -187,6 +187,102 @@ class TestRestartCleanup:
         assert await service.cleanup_interrupted() == 0
 
 
+class TestOrphanImages:
+    """DB가 참조하지 않는 이미지 회수.
+
+    마킹 이미지는 **DB에 기록되기 전에 먼저 디스크에 쓰인다.** 그 사이에 분석이
+    취소되면 경로가 어디에도 남지 않아 재시도·삭제로 정리되지 않는다. 파이썬은
+    스레드를 강제 종료할 수 없어 취소된 작업이 이미지를 마저 쓰기도 한다.
+    시작할 때 회수하는 것이 유일한 경로다.
+    """
+
+    def _age(self, storage, path, seconds=3600):
+        import os
+        import time
+
+        target = storage.image_dir / path.split("/")[-1]
+        old = time.time() - seconds
+        os.utime(target, (old, old))
+
+    def _make_image(self, storage):
+        from PIL import Image
+
+        return storage.save_image(Image.new("RGB", (10, 10)))
+
+    async def test_removes_unreferenced_image(self, service, storage) -> None:
+        path = self._make_image(storage)
+        self._age(storage, path)
+
+        assert await service.cleanup_orphan_images() == 1
+        assert not (storage.image_dir / path.split("/")[-1]).exists()
+
+    async def test_keeps_referenced_thumbnail(self, service, storage) -> None:
+        row = await _new(service)
+        path = self._make_image(storage)
+        self._age(storage, path)
+
+        row.thumbnail_path = path
+        await service._session.commit()
+
+        assert await service.cleanup_orphan_images() == 0
+        assert (storage.image_dir / path.split("/")[-1]).is_file()
+
+    async def test_keeps_referenced_marked_image(self, service, storage) -> None:
+        row = await _new(service)
+        await _run_stub(service, row)
+
+        marked = [
+            o.marked_image_path
+            for o in await service._repo.get_objects(row.analysis_id)
+            if o.marked_image_path
+        ]
+        assert marked
+
+        # 스텁이 만든 경로에 실제 파일을 만들어 둔다.
+        for path in marked:
+            (storage.image_dir / path.split("/")[-1]).write_bytes(b"x")
+            self._age(storage, path)
+
+        assert await service.cleanup_orphan_images() == 0
+        for path in marked:
+            assert (storage.image_dir / path.split("/")[-1]).is_file()
+
+    async def test_keeps_recent_files(self, service, storage) -> None:
+        """진행 중인 분석이 방금 만든 파일을 지우면 안 된다."""
+        path = self._make_image(storage)
+
+        assert await service.cleanup_orphan_images() == 0
+        assert (storage.image_dir / path.split("/")[-1]).is_file()
+
+    async def test_mixed(self, service, storage) -> None:
+        row = await _new(service)
+        kept = self._make_image(storage)
+        orphan_a = self._make_image(storage)
+        orphan_b = self._make_image(storage)
+
+        for path in (kept, orphan_a, orphan_b):
+            self._age(storage, path)
+
+        row.thumbnail_path = kept
+        await service._session.commit()
+
+        assert await service.cleanup_orphan_images() == 2
+        assert (storage.image_dir / kept.split("/")[-1]).is_file()
+
+    async def test_no_images(self, service) -> None:
+        assert await service.cleanup_orphan_images() == 0
+
+    async def test_default_age_covers_the_timeout(self) -> None:
+        """기본 대기 시간이 처리 제한 시간보다 길어야 한다.
+
+        짧으면 진행 중인 분석의 파일을 지운다.
+        """
+        from app.core.constants import PROCESSING_TIMEOUT_SECONDS
+        from app.services.analysis_service import ORPHAN_IMAGE_MIN_AGE
+
+        assert ORPHAN_IMAGE_MIN_AGE > PROCESSING_TIMEOUT_SECONDS
+
+
 class TestRetry:
     async def test_retry_resets_state(self, service) -> None:
         row = await _new(service)

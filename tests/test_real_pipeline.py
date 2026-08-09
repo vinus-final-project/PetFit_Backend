@@ -10,6 +10,7 @@
     실패 시 정리     : 뒤 단계가 실패하면 만들어 둔 이미지를 지우는가
 """
 
+import asyncio
 import json
 
 import pytest
@@ -304,6 +305,50 @@ class TestFailure:
         """성공하면 지우지 않는다. DB가 참조한다."""
         await build(storage).run(scene, GROUP, SPACE, stages)
         assert list(storage.image_dir.glob("*.jpg"))
+
+    async def test_timeout_removes_created_images(
+        self, storage, scene, stages
+    ) -> None:
+        """처리 제한 시간 초과는 CancelledError 로 온다.
+
+        CancelledError 는 BaseException 직속이라 `except Exception` 으로는
+        잡히지 않는다. 놓치면 타임아웃마다 이미지가 DB 참조 없이 남는다.
+        """
+        class SlowLLM(FakeLLM):
+            async def complete(self, prompt, images):
+                await asyncio.sleep(5)
+                return await super().complete(prompt, images)
+
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                build(storage, SlowLLM(response())).run(
+                    scene, GROUP, SPACE, stages
+                ),
+                timeout=1.0,
+            )
+
+        await asyncio.sleep(0.1)
+        assert list(storage.image_dir.glob("*.jpg")) == []
+
+    async def test_cancellation_removes_created_images(
+        self, storage, scene, stages
+    ) -> None:
+        """외부에서 취소된 경우도 같다."""
+        class SlowLLM(FakeLLM):
+            async def complete(self, prompt, images):
+                await asyncio.sleep(5)
+                return await super().complete(prompt, images)
+
+        task = asyncio.create_task(
+            build(storage, SlowLLM(response())).run(scene, GROUP, SPACE, stages)
+        )
+        await asyncio.sleep(0.8)
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert list(storage.image_dir.glob("*.jpg")) == []
 
     async def test_error_message_hides_internals(
         self, storage, scene, stages

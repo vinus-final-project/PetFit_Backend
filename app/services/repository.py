@@ -156,6 +156,27 @@ class AnalysisRepository:
         )
         return (await self._session.execute(stmt)).rowcount or 0
 
+    async def referenced_image_paths(self) -> set[str]:
+        """DB가 참조 중인 이미지 경로 전체.
+
+        고아 파일 판정에 쓴다. 두 곳에 흩어져 있다.
+
+            analysis.thumbnail_path              분석 대표 프레임
+            detected_object.marked_image_path    위험 객체 마킹
+
+        상태를 가리지 않고 전부 모은다. 진행 중인 분석의 경로가 빠지면 아직
+        쓰이는 파일을 고아로 오인한다.
+        """
+        thumbnails = await self._session.execute(
+            select(Analysis.thumbnail_path).where(Analysis.thumbnail_path.is_not(None))
+        )
+        marked = await self._session.execute(
+            select(DetectedObject.marked_image_path).where(
+                DetectedObject.marked_image_path.is_not(None)
+            )
+        )
+        return set(thumbnails.scalars().all()) | set(marked.scalars().all())
+
     async def list_stale_processing(self, before) -> Sequence[Analysis]:
         """지정 시각 이전에 시작된 진행 중 분석을 조회한다. 타임아웃 감시에 사용한다."""
         stmt = select(Analysis).where(

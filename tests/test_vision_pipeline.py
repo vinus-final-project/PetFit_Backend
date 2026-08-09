@@ -219,6 +219,76 @@ class TestEventLoop:
         assert ticks > 10
 
 
+class TestCancellation:
+    """취소가 얼마나 빨리 먹히는가.
+
+    **파이썬은 스레드를 강제 종료할 수 없다.** 처리 제한 시간을 넘겨 작업이
+    취소돼도 추론 스레드는 끝까지 돈다. 좀비가 GPU를 물고 있으면 동시 처리
+    제한이 무의미해지고, 기본 스레드 풀이 소진되면 정상 요청까지 멈춘다.
+
+    없앨 수는 없고, 낭비되는 작업을 줄일 수만 있다.
+    """
+
+    async def test_detection_is_split_into_chunks(self, storage, scene) -> None:
+        """전부를 한 번에 보내면 취소해도 30프레임을 끝까지 추론한다."""
+        sizes = []
+
+        class Counting(StubDetector):
+            def detect(self, frames):
+                sizes.append(len(frames))
+                return super().detect(frames)
+
+        async def noop(stage):
+            return None
+
+        await pipeline(storage, Counting(), detect_chunk=8).run(scene, GROUP, noop)
+
+        assert len(sizes) > 1
+        assert max(sizes) <= 8
+        assert sum(sizes) == 25
+
+    async def test_chunking_does_not_change_the_result(self, storage, scene) -> None:
+        """묶음을 나눠도 탐지 결과는 같아야 한다."""
+        async def noop(stage):
+            return None
+
+        whole = await pipeline(storage, detect_chunk=100).run(scene, GROUP, noop)
+        split = await pipeline(storage, detect_chunk=3).run(scene, GROUP, noop)
+
+        assert whole.object_names == split.object_names
+        assert whole.occupancy_ratio == split.occupancy_ratio
+
+    async def test_cancellation_stops_between_chunks(self, storage, scene) -> None:
+        """묶음 사이가 취소 확인 지점이 된다.
+
+        나누지 않으면 전 프레임을 추론한 뒤에야 취소가 반영된다.
+        """
+        seen = 0
+
+        class Slow(StubDetector):
+            def detect(self, frames):
+                nonlocal seen
+                seen += len(frames)
+                time.sleep(0.15)
+                return super().detect(frames)
+
+        async def noop(stage):
+            return None
+
+        task = asyncio.create_task(
+            pipeline(storage, Slow(), detect_chunk=5).run(scene, GROUP, noop)
+        )
+        await asyncio.sleep(0.5)
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        # 25프레임 전부가 아니라 일부만 처리됐어야 한다.
+        await asyncio.sleep(0.3)
+        assert seen < 25
+
+
 class TestFailure:
     async def test_unreadable_video(self, storage, tmp_path, stages) -> None:
         broken = tmp_path / "broken.mp4"

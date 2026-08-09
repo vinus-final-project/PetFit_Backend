@@ -29,8 +29,8 @@ from app.ai.vision import imaging
 from app.ai.vision.detector import Detector
 from app.ai.vision.occupancy import occupancy_ratio
 from app.ai.vision.tracking import IouTracker, Tracker, adopt
-from app.ai.vision.types import Detection, ImageSink, VisionResult
-from app.core.constants import FRAME_MAX_EDGE
+from app.ai.vision.types import Detection, Frame, ImageSink, VisionResult
+from app.core.constants import DETECT_CHUNK_FRAMES, FRAME_MAX_EDGE
 from app.schemas.enums import AnalysisStage, AnimalGroup
 
 __all__ = ["VisionPipeline", "STAGE_MESSAGES"]
@@ -62,6 +62,7 @@ class VisionPipeline:
         storage: ImageSink,
         tracker: Tracker | None = None,
         max_edge: int = FRAME_MAX_EDGE,
+        detect_chunk: int = DETECT_CHUNK_FRAMES,
     ) -> None:
         """
         Args:
@@ -69,11 +70,13 @@ class VisionPipeline:
             storage: 이미지 저장소.
             tracker: 객체 추적기. 기본값은 IoU 병합이다.
             max_edge: 보관할 프레임의 긴 변 픽셀 상한.
+            detect_chunk: 한 번에 스레드로 보낼 프레임 수. 취소 확인 간격이 된다.
         """
         self._detector = detector
         self._storage = storage
         self._tracker = tracker or IouTracker()
         self._max_edge = max_edge
+        self._detect_chunk = max(1, detect_chunk)
 
     async def run(
         self,
@@ -102,7 +105,7 @@ class VisionPipeline:
 
         await on_stage(AnalysisStage.OBJECT_DETECTION)
         with _guard(AnalysisStage.OBJECT_DETECTION):
-            detections = await asyncio.to_thread(self._detector.detect, video.frames)
+            detections = await self._detect(video.frames)
         _check_alignment(detections, len(video.frames))
 
         await on_stage(AnalysisStage.OBJECT_TRACKING)
@@ -148,6 +151,28 @@ class VisionPipeline:
             detected_objects=tuple(visuals.detected_objects),
             analysis_frames=tuple(visuals.analysis_frames),
         )
+
+
+    async def _detect(self, frames: Sequence[Frame]) -> list[list[Detection]]:
+        """프레임을 나눠 추론한다.
+
+        전부를 한 번에 스레드로 보내면, 처리 제한 시간을 넘겨 취소되어도 스레드가
+        30프레임을 끝까지 추론한다. **파이썬은 스레드를 강제 종료할 수 없다.**
+        좀비가 GPU를 물고 있으면 동시 처리 제한이 무의미해지고, 기본 스레드 풀이
+        소진되면 정상 요청까지 멈춘다.
+
+        나눠 보내면 사이사이가 취소 확인 지점이 되어 낭비가 한 묶음으로 줄어든다.
+        없앨 수는 없고 줄일 수만 있다.
+
+        묶음을 나눠도 결과는 같다. 탐지기는 프레임 목록을 받아 같은 길이의 목록을
+        돌려주며, 추적 모드의 ultralytics 도 ``persist=True`` 로 호출 사이의
+        상태를 유지한다.
+        """
+        rows: list[list[Detection]] = []
+        for start in range(0, len(frames), self._detect_chunk):
+            chunk = frames[start : start + self._detect_chunk]
+            rows.extend(await asyncio.to_thread(self._detector.detect, chunk))
+        return rows
 
 
 @contextmanager

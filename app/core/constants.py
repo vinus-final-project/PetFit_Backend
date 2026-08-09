@@ -7,6 +7,7 @@ DB CHECK 제약에는 포함하지 않는다. 값이 바뀔 때마다 스키마 
 __all__ = [
     "FRAME_RATE", "FRAME_MIN", "FRAME_MAX", "FRAME_MAX_EDGE",
     "DETECTION_CONFIDENCE", "ADOPTION_CONFIDENCE", "MIN_DETECTION_FRAMES",
+    "DETECT_CHUNK_FRAMES",
     "TRACKING_IOU_THRESHOLD",
     "OCCUPANCY_THRESHOLDS",
     "VIDEO_MAX_BYTES", "VIDEO_MIN_SECONDS", "VIDEO_MAX_SECONDS",
@@ -32,6 +33,17 @@ DETECTION_CONFIDENCE = 0.25
 ADOPTION_CONFIDENCE = 0.40
 #: 채택에 필요한 최소 탐지 프레임 수
 MIN_DETECTION_FRAMES = 2
+
+#: 취소를 확인하는 간격(프레임).
+#:
+#: 추론은 스레드에서 실행되는데, **파이썬은 스레드를 강제 종료할 수 없다.**
+#: 처리 제한 시간을 넘겨 작업이 취소돼도 스레드는 끝까지 돌며 CPU와 GPU를 계속
+#: 점유한다. 이미 느린 상태에서 좀비가 쌓이면 동시 처리 제한이 무의미해지고,
+#: 기본 스레드 풀(코어 수 + 4)이 소진되면 정상 요청까지 멈춘다.
+#:
+#: 프레임을 나눠 추론하면 사이사이가 취소 확인 지점이 되어, 낭비되는 작업이
+#: 최대 이 값만큼으로 줄어든다. 없앨 수는 없고 줄일 수만 있다.
+DETECT_CHUNK_FRAMES = 8
 
 # --- 객체 추적 -----------------------------------------------------------
 #: 같은 물체로 볼 최소 IoU.

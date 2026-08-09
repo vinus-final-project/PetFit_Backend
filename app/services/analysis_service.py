@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.pipeline import PipelineResult
 from app.ai.score_generator import generate
-from app.core.constants import MAX_RETRY_COUNT
+from app.core.constants import MAX_RETRY_COUNT, PROCESSING_TIMEOUT_SECONDS
 from app.core.exceptions import ErrorCode, PetFitError
 from app.models import Analysis, DetectedObject, Recommendation
 from app.schemas.enums import (
@@ -38,6 +38,12 @@ RESTART_MESSAGE = "서버가 재시작되어 분석이 중단되었습니다. �
 
 #: 처리 제한 시간을 초과한 분석에 남기는 사유.
 TIMEOUT_MESSAGE = "분석 시간이 초과되었습니다. 영상을 다시 촬영해주세요."
+
+#: 고아 이미지로 판정하기까지 기다리는 시간(초).
+#:
+#: 마킹 이미지는 DB에 기록되기 전에 먼저 디스크에 쓰인다. 이 간격이 없으면
+#: 진행 중인 분석이 방금 만든 파일을 지우게 된다. 처리 제한 시간에 여유를 더한다.
+ORPHAN_IMAGE_MIN_AGE = PROCESSING_TIMEOUT_SECONDS * 2
 
 
 @dataclass(frozen=True)
@@ -357,3 +363,38 @@ class AnalysisService:
         if count:
             logger.warning("재시작으로 중단된 분석 %d건을 실패 처리했다", count)
         return count
+
+    async def cleanup_orphan_images(
+        self, min_age_seconds: float = ORPHAN_IMAGE_MIN_AGE
+    ) -> int:
+        """DB가 참조하지 않는 이미지를 삭제한다.
+
+        앱 시작 시 1회 호출한다.
+
+        마킹 이미지는 **DB에 기록되기 전에 먼저 디스크에 쓰인다.** 그 사이에
+        분석이 실패하거나 처리 제한 시간을 넘겨 취소되면 파일만 남는다. 경로가
+        어디에도 기록되지 않아 재시도·삭제로도 정리되지 않는다.
+
+        파이썬은 스레드를 강제 종료할 수 없어, 취소된 작업이 이미지를 마저 쓰는
+        경우도 있다. 이때는 파이프라인이 지울 대상을 알 수 없으므로 이 정리가
+        유일한 회수 경로다.
+
+        Args:
+            min_age_seconds: 이 시간보다 오래된 파일만 대상으로 한다.
+                진행 중인 분석이 방금 만든 파일을 지우지 않기 위해 필요하다.
+
+        Returns:
+            삭제한 파일 수.
+        """
+        candidates = self._storage.list_images(min_age_seconds)
+        if not candidates:
+            return 0
+
+        referenced = await self._repo.referenced_image_paths()
+        orphans = [path for path in candidates if path not in referenced]
+        if not orphans:
+            return 0
+
+        removed = self._storage.delete(*orphans)
+        logger.warning("참조 없는 이미지 %d개를 삭제했다", removed)
+        return removed

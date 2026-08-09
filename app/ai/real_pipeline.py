@@ -104,7 +104,11 @@ class RealPipeline:
                 ),
                 load_image=await self._image_loader(vision.analysis_frames),
             )
-        except Exception:
+        except BaseException:
+            # **Exception 이 아니라 BaseException 이다.** 처리 제한 시간을 넘기면
+            # asyncio 가 CancelledError 를 던지는데, 이것은 BaseException 직속이라
+            # `except Exception` 으로는 잡히지 않는다. 그대로 두면 타임아웃 때마다
+            # Vision 이 만든 이미지가 DB 참조 없이 남아 영구 잔류한다.
             self._storage.delete(*vision.marked_image_paths)
             raise
 

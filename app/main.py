@@ -66,7 +66,12 @@ async def lifespan(app: FastAPI):
 
     try:
         async with session_scope() as session:
-            await AnalysisService(session, storage).cleanup_interrupted()
+            service = AnalysisService(session, storage)
+            await service.cleanup_interrupted()
+            # 마킹 이미지는 DB에 기록되기 전에 디스크에 먼저 쓰인다. 그 사이에
+            # 분석이 취소되면 경로가 어디에도 남지 않아 재시도·삭제로 정리되지
+            # 않는다. 시작할 때 참조 없는 파일을 회수한다.
+            await service.cleanup_orphan_images()
     except Exception:  # noqa: BLE001
         # DB가 준비되지 않아도 앱은 뜨게 둔다. /animals·/spaces 는 DB 없이 동작하므로
         # 프론트가 화면 개발을 계속할 수 있다. 다만 정리되지 않은 행이 남았음을 남긴다.
