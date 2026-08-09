@@ -25,3 +25,13 @@ ultralytics>=8.3
 # On Windows or Linux without a GPU, install the CPU wheel first to avoid
 # downloading the CUDA build:
 #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+# --- Environment analysis (pipeline stage 12) ---
+# MLX vision-language runtime. Runs Qwen3-VL locally so room images never leave
+# the machine; the model selection criteria weigh data processing location.
+#
+# Apple Silicon macOS only. The package does not install on Windows or Linux,
+# which is why it lives here and not in requirements.txt.
+#
+#   mlx-community/Qwen3-VL-32B-Instruct-4bit   ~20GB
+mlx-vlm>=0.1.12
