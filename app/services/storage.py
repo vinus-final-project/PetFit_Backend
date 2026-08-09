@@ -185,12 +185,17 @@ class Storage:
         Returns:
             ``/images/...`` 형식의 상대 경로.
         """
-        cutoff = time.time() - min_age_seconds
+        # 0이면 거르지 않는다. `time.time() - 0` 을 기준으로 비교하면 방금 쓴
+        # 파일의 mtime 이 그 값보다 커질 수 있어, 전부 달라는 요청에 갓 만든
+        # 파일이 빠진다. 파일 시각과 시계는 해상도가 달라 순서가 뒤집힌다.
+        cutoff = time.time() - min_age_seconds if min_age_seconds > 0 else None
         found: list[str] = []
 
         for path in self.image_dir.iterdir():
             try:
-                if not path.is_file() or path.stat().st_mtime > cutoff:
+                if not path.is_file():
+                    continue
+                if cutoff is not None and path.stat().st_mtime > cutoff:
                     continue
             except OSError:
                 # 열거 도중 삭제될 수 있다. 다음 실행에서 다시 잡힌다.
