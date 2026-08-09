@@ -153,7 +153,7 @@ MySQL 서버가 없어도 실행된다. 서비스 계층 테스트는 SQLite 인
 | `ai/vision/detector.py` 의 `Detector` | Vision ↔ 탐지 모델 |
 | `ai/llm/base.py` 의 `VisionLLM` | 환경 분석 ↔ 생성 모델 |
 
-`app/ai/real_pipeline.py` 가 셋을 엮어 `Pipeline` 을 만족시킨다. **세 담당의 산출물이 만나는 유일한 지점이다.**
+`app/ai/analysis_pipeline.py` 가 셋을 엮어 `Pipeline` 을 만족시킨다. **세 담당의 산출물이 만나는 유일한 지점이다.**
 
 모델 없이 전 구간이 돌아간다. `StubDetector` 와 `FakeLLM` 을 끼우면 영상 파일에서 최종 결과까지 검증된다. 실제 모델은 성능평가 후에 교체한다.
 

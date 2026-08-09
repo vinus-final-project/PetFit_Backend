@@ -1,108 +1,53 @@
-"""1~12단계 조립 검증.
+"""전체 파이프라인 조립 검증.
 
-Vision과 환경 분석을 엮는 지점만 본다. 각 단계의 내부 동작은
-`test_vision_pipeline.py` 와 `test_environment_analysis.py` 가 이미 검증한다.
+영상 파일에서 시작해 ``PipelineResult`` 까지 간다. 부품별 검증은 각 담당의
+테스트에 있고, 여기서 보는 것은 **세 산출물이 만나는 지점**이다.
 
-여기서 확인하는 것은 **경계에서 값이 제대로 넘어가는가**다. 점수가 12단계 입력으로
-들어가는지, 단계 콜백이 빠짐없이 불리는지, 실패했을 때 만든 이미지를 정리하는지.
-경계는 각자의 단위 테스트가 보지 못하는 자리라 버그가 남기 쉽다.
+경계에서만 드러나는 문제를 본다.
+
+    점수 이중 산출  : 서술이 참조한 점수와 저장될 점수가 같은가
+    프레임 선정 규칙 : Vision 과 12단계가 각자 구현한 규칙이 일치하는가
+    실패 시 정리     : 뒤 단계가 실패하면 만들어 둔 이미지를 지우는가
 """
 
+import asyncio
 import json
 
 import pytest
-from PIL import Image
 
-from app.ai.analysis_pipeline import AnalysisPipeline, encode_frames
 from app.ai.environment_analysis import EnvironmentAnalyzer
+from app.ai.llm.base import LLMError
 from app.ai.llm.fake import FakeLLM
-from app.ai.pipeline import DetectedObject, PipelineError
+from app.ai.pipeline import Pipeline, PipelineError, PipelineResult
+from app.ai.prompts import AnalysisContext, select_image_frames
+from app.ai.analysis_pipeline import AnalysisPipeline, _encode
 from app.ai.score_generator import generate
-from app.ai.vision.types import Frame, VisionResult
-from app.schemas.enums import AnalysisStage, AnimalGroup, RiskLevel, SpaceType
+from app.ai.vision.detector import StubDetector
+from app.ai.vision.pipeline import VisionPipeline
+from app.schemas.enums import (
+    AnalysisStage,
+    AnimalGroup,
+    RecommendationType,
+    RiskLevel,
+    RiskSource,
+    SpaceType,
+)
 
 GROUP = AnimalGroup.SMALL_DOG
 SPACE = SpaceType.LIVING_ROOM
-
-
-def frame(number: int, size=(64, 48)) -> Frame:
-    return Frame(number=number, timestamp=number / 3, image=Image.new("RGB", size, (120, 60, 30)))
-
-
-def detected(name, risk=RiskLevel.SAFE, frame_number=1, marked=None) -> DetectedObject:
-    return DetectedObject(
-        name=name,
-        risk=risk,
-        confidence=0.9,
-        detection_frame_count=5,
-        frame_number=frame_number,
-        x=0.1,
-        y=0.1,
-        width=0.2,
-        height=0.2,
-        marked_image_path=marked,
-    )
-
-
-def vision_result(**overrides) -> VisionResult:
-    values = {
-        "capture_duration": 8.4,
-        "frame_count": 25,
-        "occupancy_ratio": 0.35,
-        "thumbnail_path": "/images/thumb.jpg",
-        "thumbnail_frame": 7,
-        "detected_objects": (
-            detected("전선", RiskLevel.HIGH, 3, "/images/mark-1.jpg"),
-            detected("소파", RiskLevel.SAFE, 5),
-        ),
-        "analysis_frames": (frame(7), frame(3)),
-    }
-    values.update(overrides)
-    return VisionResult(**values)
-
-
-class FakeVision:
-    """1~10단계 자리. 고정된 산출물을 돌려주고 단계 콜백을 흉내 낸다."""
-
-    def __init__(self, result: VisionResult | None = None, error: Exception | None = None):
-        self._result = result if result is not None else vision_result()
-        self._error = error
-        self.calls: list[tuple] = []
-
-    async def run(self, video_path, group, on_stage):
-        self.calls.append((video_path, group))
-        for stage in (
-            AnalysisStage.FRAME_EXTRACTION,
-            AnalysisStage.OBJECT_DETECTION,
-            AnalysisStage.OBJECT_TRACKING,
-            AnalysisStage.FRAME_SELECTION,
-            AnalysisStage.RISK_MARKING,
-        ):
-            await on_stage(stage)
-        if self._error is not None:
-            raise self._error
-        return self._result
-
-
-class FakeStore:
-    def __init__(self) -> None:
-        self.deleted: list[str] = []
-
-    def save_image(self, image) -> str:
-        return "/images/x.jpg"
-
-    def delete(self, *relative_paths) -> int:
-        kept = [p for p in relative_paths if p]
-        self.deleted.extend(kept)
-        return len(kept)
+SCENE_SECONDS = 8.4
 
 
 def response(**overrides) -> str:
+    """검증을 통과하는 응답."""
     body = {
         "riskFactors": [
             {"text": "전선이 바닥에 노출되어 있습니다.", "source": "DETECTED"},
         ],
-        "analysis": ["활동 공간은 충분합니다.", "전선 정리가 필요합니다."],
+        "analysis": [
+            "활동 공간은 충분하지만 전선이 위험 요소입니다.",
+            "휴식 공간은 소파로 일부 확보되어 있습니다.",
+        ],
         "recommendations": [
             {
                 "type": "SAFETY",
@@ -116,254 +61,503 @@ def response(**overrides) -> str:
     return json.dumps(body, ensure_ascii=False)
 
 
-def make(llm=None, vision=None, store=None) -> tuple:
-    llm = llm if llm is not None else FakeLLM(response())
-    vision = vision if vision is not None else FakeVision()
-    pipeline = AnalysisPipeline(vision, EnvironmentAnalyzer(llm), store)
-    return pipeline, llm, vision
+@pytest.fixture
+def scene(make_video):
+    return make_video(seconds=SCENE_SECONDS, fps=30, width=640, height=360)
 
 
-async def run(pipeline, stages=None):
-    async def on_stage(stage):
-        if stages is not None:
-            stages.append(stage)
+@pytest.fixture
+def stages():
+    seen: list[AnalysisStage] = []
 
-    return await pipeline.run("clip.mp4", GROUP, SPACE, on_stage)
+    async def record(stage: AnalysisStage) -> None:
+        seen.append(stage)
 
+    record.seen = seen
+    return record
 
-# =============================================================================
-# 산출물 조립
-# =============================================================================
 
-
-class TestResult:
-    async def test_carries_vision_values(self) -> None:
-        result = await run(make()[0])
-
-        assert result.capture_duration == 8.4
-        assert result.frame_count == 25
-        assert result.occupancy_ratio == 0.35
-        assert result.thumbnail_path == "/images/thumb.jpg"
-
-    async def test_carries_detected_objects(self) -> None:
-        result = await run(make()[0])
-        assert [o.name for o in result.detected_objects] == ["전선", "소파"]
-
-    async def test_carries_generated_narrative(self) -> None:
-        result = await run(make()[0])
-
-        assert len(result.risk_factors) == 1
-        assert len(result.analysis) == 2
-        assert len(result.recommendations) == 1
-
-    async def test_result_has_no_score(self) -> None:
-        """점수는 서비스 계층이 저장 시점에 산출한다."""
-        result = await run(make()[0])
-        assert not hasattr(result, "total_score")
-
-    async def test_object_names_feed_scoring(self) -> None:
-        """서비스가 이 집합으로 점수를 다시 계산한다."""
-        result = await run(make()[0])
-        assert result.object_names == {"전선", "소파"}
-
-
-# =============================================================================
-# 단계 진행
-# =============================================================================
-
-
-class TestStages:
-    async def test_all_stages_in_order(self) -> None:
-        stages: list[AnalysisStage] = []
-        await run(make()[0], stages)
-
-        assert stages == list(AnalysisStage)
-
-    async def test_score_stage_precedes_environment(self) -> None:
-        """점수를 모델 입력으로 넘기려면 먼저 산출해야 한다."""
-        stages: list[AnalysisStage] = []
-        await run(make()[0], stages)
-
-        assert stages.index(AnalysisStage.SCORE_CALCULATION) < stages.index(
-            AnalysisStage.ENVIRONMENT_ANALYSIS
-        )
-
-
-# =============================================================================
-# 11단계 → 12단계 전달
-# =============================================================================
-
-
-class TestScoreHandoff:
-    async def test_score_reaches_the_model(self) -> None:
-        pipeline, llm, _ = make()
-        await run(pipeline)
-
-        payload = json.loads(llm.prompts[0].user.split("\n\n##")[0])
-        expected = generate(GROUP, SPACE, {"전선", "소파"}, 0.35)
-        assert payload["petFitScore"] == expected.as_dict()
-
-    async def test_space_reaches_the_model(self) -> None:
-        """공간에 따라 평가 항목이 달라진다. 서술에도 반영되어야 한다."""
-        pipeline, llm, _ = make()
-
-        async def on_stage(stage):
-            return None
-
-        await pipeline.run("clip.mp4", GROUP, SpaceType.BALCONY, on_stage)
-
-        payload = json.loads(llm.prompts[0].user.split("\n\n##")[0])
-        assert payload["spaceType"] == "balcony"
-
-    async def test_thumbnail_frame_reaches_the_model(self) -> None:
-        pipeline, llm, _ = make()
-        await run(pipeline)
-
-        payload = json.loads(llm.prompts[0].user.split("\n\n##")[0])
-        assert payload["representativeFrame"]["frameNumber"] == 7
-
-    async def test_score_matches_what_service_will_compute(self) -> None:
-        """파이프라인과 서비스가 다른 점수를 내면 서술과 점수가 어긋난다."""
-        pipeline, llm, _ = make()
-        result = await run(pipeline)
-
-        sent = json.loads(llm.prompts[0].user.split("\n\n##")[0])["petFitScore"]
-        recomputed = generate(GROUP, SPACE, result.object_names, result.occupancy_ratio)
-        assert sent == recomputed.as_dict()
-
-
-# =============================================================================
-# 이미지 전달
-# =============================================================================
-
-
-class TestImages:
-    async def test_analysis_frames_are_sent(self) -> None:
-        pipeline, llm, _ = make()
-        await run(pipeline)
-
-        assert llm.image_counts[0] == 2
-
-    async def test_no_frames_sends_nothing(self) -> None:
-        pipeline, llm, _ = make(vision=FakeVision(vision_result(analysis_frames=())))
-        await run(pipeline)
-
-        assert llm.image_counts[0] == 0
-
-    async def test_encoded_as_jpeg(self) -> None:
-        encoded = encode_frames([frame(1)])
-        assert encoded[1].startswith(b"\xff\xd8")
-
-    async def test_encoding_keeps_frame_numbers(self) -> None:
-        encoded = encode_frames([frame(7), frame(3)])
-        assert set(encoded) == {7, 3}
-
-    async def test_non_rgb_is_converted(self) -> None:
-        """JPEG는 알파 채널을 저장하지 못한다."""
-        odd = Frame(number=1, timestamp=0.0, image=Image.new("RGBA", (8, 8)))
-        assert 1 in encode_frames([odd])
-
-    async def test_broken_frame_does_not_stop_the_rest(self) -> None:
-        class Broken:
-            mode = "RGB"
-
-            def save(self, *args, **kwargs):
-                raise OSError("손상된 이미지")
-
-        frames = [Frame(number=1, timestamp=0.0, image=Broken()), frame(2)]
-        encoded = encode_frames(frames)
-
-        assert set(encoded) == {2}
-
-
-# =============================================================================
-# 실패 처리
-# =============================================================================
-
-
-class TestFailure:
-    async def test_vision_failure_propagates(self) -> None:
-        error = PipelineError("객체 탐지에 실패했습니다.", AnalysisStage.OBJECT_DETECTION)
-        pipeline, _, _ = make(vision=FakeVision(error=error))
-
-        with pytest.raises(PipelineError) as exc:
-            await run(pipeline)
-
-        assert exc.value.stage is AnalysisStage.OBJECT_DETECTION
-
-    async def test_environment_failure_reports_its_stage(self) -> None:
-        pipeline, _, _ = make(llm=FakeLLM("깨진 응답"))
-
-        with pytest.raises(PipelineError) as exc:
-            await run(pipeline)
-
-        assert exc.value.stage is AnalysisStage.ENVIRONMENT_ANALYSIS
-
-    async def test_environment_failure_discards_images(self) -> None:
-        """DB에 기록되기 전이라 지우지 않으면 참조 없이 디스크에 남는다."""
-        store = FakeStore()
-        pipeline, _, _ = make(llm=FakeLLM("깨진 응답"), store=store)
-
-        with pytest.raises(PipelineError):
-            await run(pipeline)
-
-        assert set(store.deleted) == {"/images/thumb.jpg", "/images/mark-1.jpg"}
-
-    async def test_success_keeps_images(self) -> None:
-        store = FakeStore()
-        pipeline, _, _ = make(store=store)
-        await run(pipeline)
-
-        assert store.deleted == []
-
-    async def test_vision_failure_needs_no_cleanup(self) -> None:
-        """Vision이 실패하면 만든 이미지도 없다."""
-        store = FakeStore()
-        error = PipelineError("추출 실패", AnalysisStage.FRAME_EXTRACTION)
-        pipeline, _, _ = make(vision=FakeVision(error=error), store=store)
-
-        with pytest.raises(PipelineError):
-            await run(pipeline)
-
-        assert store.deleted == []
-
-    async def test_cleanup_failure_does_not_mask_the_cause(self) -> None:
-        """정리에 실패해도 원래 실패 사유가 살아 있어야 한다."""
-
-        class BrokenStore(FakeStore):
-            def delete(self, *paths):
-                raise OSError("디스크 오류")
-
-        pipeline, _, _ = make(llm=FakeLLM("깨진 응답"), store=BrokenStore())
-
-        with pytest.raises(PipelineError) as exc:
-            await run(pipeline)
-
-        assert exc.value.stage is AnalysisStage.ENVIRONMENT_ANALYSIS
-
-    async def test_no_store_is_allowed(self) -> None:
-        pipeline, _, _ = make(llm=FakeLLM("깨진 응답"), store=None)
-
-        with pytest.raises(PipelineError):
-            await run(pipeline)
-
-
-# =============================================================================
-# 계약
-# =============================================================================
+def build(storage, llm=None, detector=None) -> AnalysisPipeline:
+    return AnalysisPipeline(
+        vision=VisionPipeline(detector or StubDetector(), storage),
+        analyzer=EnvironmentAnalyzer(llm or FakeLLM(response())),
+        storage=storage,
+    )
 
 
 class TestContract:
-    async def test_satisfies_pipeline_protocol(self) -> None:
-        """서비스 계층이 StubPipeline 자리에 그대로 끼울 수 있어야 한다."""
-        from app.ai.pipeline import Pipeline
+    async def test_satisfies_the_pipeline_protocol(self, storage) -> None:
+        assert isinstance(build(storage), Pipeline)
 
-        pipeline, _, _ = make()
-        assert isinstance(pipeline, Pipeline)
+    async def test_returns_pipeline_result(self, storage, scene, stages) -> None:
+        result = await build(storage).run(scene, GROUP, SPACE, stages)
+        assert isinstance(result, PipelineResult)
 
-    async def test_video_path_reaches_vision(self) -> None:
-        pipeline, _, vision = make()
-        await run(pipeline)
+    async def test_reports_every_stage_in_order(self, storage, scene, stages) -> None:
+        await build(storage).run(scene, GROUP, SPACE, stages)
+        assert stages.seen == list(AnalysisStage)
 
-        assert vision.calls[0][0] == "clip.mp4"
-        assert vision.calls[0][1] is GROUP
+    async def test_progress_never_goes_backwards(
+        self, storage, scene, stages
+    ) -> None:
+        await build(storage).run(scene, GROUP, SPACE, stages)
+        progress = [s.progress for s in stages.seen]
+        assert progress == sorted(progress)
+
+    async def test_can_replace_the_stub(self, storage, scene, stages) -> None:
+        """StubPipeline 과 같은 자리에 들어가므로 필드 구성이 같아야 한다."""
+        from app.ai.stub import StubPipeline
+
+        real = await build(storage).run(scene, GROUP, SPACE, stages)
+        stub = await StubPipeline(speed=0).run(scene, GROUP, SPACE, stages)
+
+        assert set(vars(real)) == set(vars(stub))
+
+
+class TestVisionOutput:
+    async def test_carries_detection_results(self, storage, scene, stages) -> None:
+        result = await build(storage).run(scene, GROUP, SPACE, stages)
+        assert result.object_names == {"전선", "창문", "카펫", "소파", "급수기"}
+
+    async def test_carries_measurements(self, storage, scene, stages) -> None:
+        result = await build(storage).run(scene, GROUP, SPACE, stages)
+
+        assert result.capture_duration == pytest.approx(SCENE_SECONDS, abs=0.2)
+        assert result.frame_count == 25
+        assert 0.0 < result.occupancy_ratio < 1.0
+        assert result.thumbnail_path.startswith("/images/")
+
+    async def test_marked_images_exist(self, storage, scene, stages) -> None:
+        result = await build(storage).run(scene, GROUP, SPACE, stages)
+
+        assert result.marked_image_paths
+        for path in result.marked_image_paths:
+            assert (storage.image_dir / path.split("/")[-1]).is_file()
+
+
+class TestScoreConsistency:
+    """서술이 참조한 점수와 화면에 표시될 점수는 같아야 한다."""
+
+    async def test_reproduces_the_documented_score(
+        self, storage, scene, stages
+    ) -> None:
+        result = await build(storage).run(scene, GROUP, SPACE, stages)
+        score = generate(GROUP, SPACE, result.object_names, result.occupancy_ratio)
+        assert score.total == 56
+
+    async def test_llm_receives_the_stored_score(
+        self, storage, scene, stages
+    ) -> None:
+        """서비스 계층이 저장할 점수를 12단계가 그대로 받아야 한다.
+
+        어긋나면 "안전합니다" 라는 서술 옆에 낮은 점수가 표시된다.
+        """
+        llm = FakeLLM(response())
+        result = await build(storage, llm).run(scene, GROUP, SPACE, stages)
+
+        stored = generate(GROUP, SPACE, result.object_names, result.occupancy_ratio)
+        sent = json.loads(_payload_of(llm.prompts[0]))["petFitScore"]
+
+        assert sent["total"] == stored.total
+
+    async def test_score_changes_with_the_space(self, storage, scene, stages) -> None:
+        """공간이 다르면 평가 항목이 달라 점수가 달라진다."""
+        result = await build(storage).run(scene, GROUP, SPACE, stages)
+
+        living = generate(GROUP, SpaceType.LIVING_ROOM, result.object_names,
+                          result.occupancy_ratio)
+        balcony = generate(GROUP, SpaceType.BALCONY, result.object_names,
+                           result.occupancy_ratio)
+        assert living.total != balcony.total
+
+
+class TestImages:
+    async def test_sends_images_to_the_model(self, storage, scene, stages) -> None:
+        """이미지가 없으면 탐지 대상 밖의 위험 요소를 찾을 수 없다."""
+        llm = FakeLLM(response())
+        await build(storage, llm).run(scene, GROUP, SPACE, stages)
+
+        assert llm.image_counts[0] > 0
+
+    async def test_respects_the_image_limit(self, storage, scene, stages) -> None:
+        from app.core.constants import LLM_MAX_IMAGES
+
+        llm = FakeLLM(response())
+        await build(storage, llm).run(scene, GROUP, SPACE, stages)
+
+        assert llm.image_counts[0] <= LLM_MAX_IMAGES
+
+    async def test_sends_unmarked_originals(self, storage, scene, stages) -> None:
+        """박스를 그린 이미지를 보내면 모델이 표시된 객체만 다시 서술한다."""
+        from io import BytesIO
+
+        from PIL import Image
+
+        sent: list[bytes] = []
+
+        class Capturing(FakeLLM):
+            async def complete(self, prompt, images):
+                sent.extend(images)
+                return await super().complete(prompt, images)
+
+        await build(storage, Capturing(response())).run(scene, GROUP, SPACE, stages)
+
+        for data in sent:
+            with Image.open(BytesIO(data)) as image:
+                colors = {c for _, c in image.convert("RGB").getcolors(1 << 20)}
+            assert (255, 0, 0) not in colors
+
+    async def test_frame_selection_rules_agree(self, storage, scene, stages) -> None:
+        """Vision 이 남긴 프레임과 12단계가 요청하는 프레임이 같아야 한다.
+
+        규칙은 ``pipeline.select_analysis_frames()`` 하나로 통합되어 있으므로
+        지금은 갈라질 수 없다. 어느 한쪽이 다시 직접 구현하면 이 테스트가 잡는다.
+        요청한 프레임이 없으면 이미지가 조용히 빠져 관찰 근거가 사라진다.
+        """
+        vision = VisionPipeline(StubDetector(), storage)
+        result = await vision.run(scene, GROUP, stages)
+
+        score = generate(GROUP, SPACE, result.object_names, result.occupancy_ratio)
+        context = AnalysisContext(
+            group=GROUP,
+            space=SPACE,
+            objects=result.detected_objects,
+            occupancy_ratio=result.occupancy_ratio,
+            score=score,
+            thumbnail_frame=result.thumbnail_frame,
+        )
+
+        requested = set(select_image_frames(context))
+        available = {f.number for f in result.analysis_frames}
+        assert requested == available
+
+    async def test_thumbnail_frame_matches_the_first_analysis_frame(
+        self, storage, scene, stages
+    ) -> None:
+        result = await VisionPipeline(StubDetector(), storage).run(
+            scene, GROUP, stages
+        )
+        assert result.thumbnail_frame == result.analysis_frames[0].number
+
+
+class TestAnalyzerOutput:
+    async def test_carries_risk_factors(self, storage, scene, stages) -> None:
+        result = await build(storage).run(scene, GROUP, SPACE, stages)
+
+        assert len(result.risk_factors) == 1
+        assert result.risk_factors[0].source is RiskSource.DETECTED
+
+    async def test_carries_analysis(self, storage, scene, stages) -> None:
+        result = await build(storage).run(scene, GROUP, SPACE, stages)
+        assert len(result.analysis) == 2
+
+    async def test_carries_recommendations(self, storage, scene, stages) -> None:
+        result = await build(storage).run(scene, GROUP, SPACE, stages)
+
+        assert len(result.recommendations) == 1
+        assert result.recommendations[0].type is RecommendationType.SAFETY
+        assert result.recommendations[0].priority == 1
+
+    async def test_regeneration_still_produces_a_result(
+        self, storage, scene, stages
+    ) -> None:
+        """첫 응답이 거절돼도 재생성으로 통과하면 분석은 성공한다."""
+        llm = FakeLLM("설명 문장만 있고 JSON이 없습니다", response())
+        result = await build(storage, llm).run(scene, GROUP, SPACE, stages)
+
+        assert llm.call_count == 2
+        assert len(result.analysis) == 2
+
+
+class TestFailure:
+    async def test_vision_failure_propagates(self, storage, tmp_path, stages) -> None:
+        broken = tmp_path / "broken.mp4"
+        broken.write_bytes(b"not a video")
+
+        with pytest.raises(PipelineError) as e:
+            await build(storage).run(broken, GROUP, SPACE, stages)
+        assert e.value.stage is AnalysisStage.FRAME_EXTRACTION
+
+    async def test_analysis_failure_keeps_the_stage(
+        self, storage, scene, stages
+    ) -> None:
+        llm = FakeLLM(LLMError("모델 응답 없음"))
+
+        with pytest.raises(PipelineError) as e:
+            await build(storage, llm).run(scene, GROUP, SPACE, stages)
+        assert e.value.stage is AnalysisStage.ENVIRONMENT_ANALYSIS
+
+    async def test_analysis_failure_removes_created_images(
+        self, storage, scene, stages
+    ) -> None:
+        """Vision 이 만든 이미지가 DB 참조 없이 남으면 추적할 수 없다.
+
+        재시도까지 겹치면 분석 1건에 최대 12장이 쌓인다.
+        """
+        llm = FakeLLM(LLMError("모델 응답 없음"))
+
+        with pytest.raises(PipelineError):
+            await build(storage, llm).run(scene, GROUP, SPACE, stages)
+
+        assert list(storage.image_dir.glob("*.jpg")) == []
+
+    async def test_successful_run_keeps_images(self, storage, scene, stages) -> None:
+        """성공하면 지우지 않는다. DB가 참조한다."""
+        await build(storage).run(scene, GROUP, SPACE, stages)
+        assert list(storage.image_dir.glob("*.jpg"))
+
+    async def test_timeout_removes_created_images(
+        self, storage, scene, stages
+    ) -> None:
+        """처리 제한 시간 초과는 CancelledError 로 온다.
+
+        CancelledError 는 BaseException 직속이라 `except Exception` 으로는
+        잡히지 않는다. 놓치면 타임아웃마다 이미지가 DB 참조 없이 남는다.
+        """
+        class SlowLLM(FakeLLM):
+            async def complete(self, prompt, images):
+                await asyncio.sleep(5)
+                return await super().complete(prompt, images)
+
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                build(storage, SlowLLM(response())).run(
+                    scene, GROUP, SPACE, stages
+                ),
+                timeout=1.0,
+            )
+
+        await asyncio.sleep(0.1)
+        assert list(storage.image_dir.glob("*.jpg")) == []
+
+    async def test_cancellation_removes_created_images(
+        self, storage, scene, stages
+    ) -> None:
+        """외부에서 취소된 경우도 같다."""
+        class SlowLLM(FakeLLM):
+            async def complete(self, prompt, images):
+                await asyncio.sleep(5)
+                return await super().complete(prompt, images)
+
+        task = asyncio.create_task(
+            build(storage, SlowLLM(response())).run(scene, GROUP, SPACE, stages)
+        )
+        await asyncio.sleep(0.8)
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert list(storage.image_dir.glob("*.jpg")) == []
+
+    async def test_error_message_hides_internals(
+        self, storage, scene, stages
+    ) -> None:
+        llm = FakeLLM(LLMError("connect failed: user:secret@10.0.0.1"))
+
+        with pytest.raises(PipelineError) as e:
+            await build(storage, llm).run(scene, GROUP, SPACE, stages)
+        assert "secret" not in e.value.message
+
+
+class TestGroups:
+    async def test_risk_depends_on_the_group(self, storage, scene, stages) -> None:
+        dog = await build(storage).run(scene, AnimalGroup.SMALL_DOG, SPACE, stages)
+        cat = await build(storage).run(scene, AnimalGroup.CAT, SPACE, stages)
+
+        def risk_of(result, name):
+            return next(o.risk for o in result.detected_objects if o.name == name)
+
+        assert risk_of(dog, "창문") is RiskLevel.LOW
+        assert risk_of(cat, "창문") is RiskLevel.HIGH
+
+    async def test_group_reaches_the_prompt(self, storage, scene, stages) -> None:
+        llm = FakeLLM(response())
+        await build(storage, llm).run(scene, AnimalGroup.CAT, SPACE, stages)
+
+        payload = json.loads(_payload_of(llm.prompts[0]))
+        assert payload["animalGroup"] == AnimalGroup.CAT.value
+
+    async def test_space_reaches_the_prompt(self, storage, scene, stages) -> None:
+        llm = FakeLLM(response())
+        await build(storage, llm).run(scene, GROUP, SpaceType.BEDROOM, stages)
+
+        payload = json.loads(_payload_of(llm.prompts[0]))
+        assert payload["spaceType"] == SpaceType.BEDROOM.value
+
+
+def _payload_of(prompt) -> str:
+    """user 메시지에서 입력 JSON 부분만 꺼낸다."""
+    text = prompt.user
+    end = text.rfind("}")
+    return text[: end + 1]
+
+
+class TestEncoding:
+    """12단계에 넘길 프레임 변환.
+
+    파이프라인을 통과시키는 검증은 실제 프레임을 쓰므로 정상 경로만 지나간다.
+    변환 규칙 자체는 여기서 직접 확인한다.
+    """
+
+    async def test_produces_jpeg(self) -> None:
+        assert _encode([_frame(1)])[1].startswith(b"\xff\xd8")
+
+    async def test_keeps_frame_numbers(self) -> None:
+        """12단계가 번호로 이미지를 찾는다. 어긋나면 이미지가 조용히 빠진다."""
+        assert set(_encode([_frame(7), _frame(3)])) == {7, 3}
+
+    async def test_converts_non_rgb(self) -> None:
+        """JPEG 는 알파 채널을 저장하지 못한다. 변환하지 않으면 저장에서 실패한다."""
+        from PIL import Image
+
+        from app.ai.vision.types import Frame
+
+        frame = Frame(number=1, timestamp=0.0, image=Image.new("RGBA", (8, 8)))
+        assert 1 in _encode([frame])
+
+    async def test_broken_frame_does_not_lose_the_rest(self) -> None:
+        """12단계는 이미지가 없어도 탐지 결과만으로 서술한다.
+
+        여기서 예외를 올리면 그 대비까지 가지 못하고 분석 전체가 실패한다.
+        이미지 한 장 때문에 앞 단계의 영상 처리와 추론을 통째로 버리게 된다.
+        """
+        frames = [_broken_frame(1), _frame(2)]
+        assert set(_encode(frames)) == {2}
+
+    async def test_all_frames_broken_gives_empty(self) -> None:
+        """전부 실패해도 예외를 올리지 않는다. 탐지 결과만으로 서술한다."""
+        assert _encode([_broken_frame(1)]) == {}
+
+
+def _frame(number: int):
+    from PIL import Image
+
+    from app.ai.vision.types import Frame
+
+    return Frame(
+        number=number,
+        timestamp=number / 3,
+        image=Image.new("RGB", (32, 24), (120, 60, 30)),
+    )
+
+
+def _broken_frame(number: int):
+    """저장 시점에 실패하는 프레임. 손상된 디코딩 결과를 흉내 낸다."""
+    from app.ai.vision.types import Frame
+
+    class Unencodable:
+        mode = "RGB"
+
+        def save(self, *args, **kwargs):
+            raise OSError("손상된 이미지")
+
+    return Frame(number=number, timestamp=0.0, image=Unencodable())
+
+
+class TestCleanupFailure:
+    """정리 실패가 원래의 실패 사유를 덮지 않아야 한다."""
+
+    async def test_original_failure_survives(self, storage, scene, stages) -> None:
+        """저장소가 터져도 클라이언트는 12단계 실패를 그대로 받아야 한다."""
+
+        class BrokenStore:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def save_image(self, image):
+                return self._inner.save_image(image)
+
+            def delete(self, *paths):
+                raise OSError("디스크 오류")
+
+        pipeline = AnalysisPipeline(
+            vision=VisionPipeline(StubDetector(), BrokenStore(storage)),
+            analyzer=EnvironmentAnalyzer(FakeLLM("깨진 응답"), max_regenerations=0),
+            storage=BrokenStore(storage),
+        )
+
+        with pytest.raises(PipelineError) as exc:
+            await pipeline.run(scene, GROUP, SPACE, stages)
+
+        assert exc.value.stage is AnalysisStage.ENVIRONMENT_ANALYSIS
+        assert "디스크" not in exc.value.message
+
+
+class TestScoreFailure:
+    """11단계 실패에 단계를 붙인다.
+
+    규칙 기반이라 실패가 거의 없지만, 단계 없이 예외가 나가면 클라이언트가
+    재촬영과 재시도 중 무엇을 안내할지 정할 근거를 잃는다.
+
+    `generate` 를 직접 실패시킨다. 지원하지 않는 그룹을 넣는 방법도 있으나
+    그 경우 Vision 의 위험도 판정에서 먼저 실패해 11단계까지 오지 않는다.
+    """
+
+    async def test_failure_reports_score_stage(
+        self, storage, scene, stages, monkeypatch
+    ) -> None:
+        def broken(*args, **kwargs):
+            raise KeyError("정의되지 않은 그룹")
+
+        monkeypatch.setattr("app.ai.analysis_pipeline.generate", broken)
+
+        with pytest.raises(PipelineError) as exc:
+            await build(storage).run(scene, GROUP, SPACE, stages)
+
+        assert exc.value.stage is AnalysisStage.SCORE_CALCULATION
+
+    async def test_failure_hides_internals(
+        self, storage, scene, stages, monkeypatch
+    ) -> None:
+        def broken(*args, **kwargs):
+            raise KeyError("AnimalGroup.REPTILE")
+
+        monkeypatch.setattr("app.ai.analysis_pipeline.generate", broken)
+
+        with pytest.raises(PipelineError) as exc:
+            await build(storage).run(scene, GROUP, SPACE, stages)
+
+        assert "REPTILE" not in exc.value.message
+
+    async def test_failure_removes_created_images(
+        self, storage, scene, stages, monkeypatch
+    ) -> None:
+        """11단계에서 실패해도 Vision 이 만든 이미지는 이미 디스크에 있다."""
+
+        def broken(*args, **kwargs):
+            raise KeyError("정의되지 않은 그룹")
+
+        monkeypatch.setattr("app.ai.analysis_pipeline.generate", broken)
+
+        with pytest.raises(PipelineError):
+            await build(storage).run(scene, GROUP, SPACE, stages)
+
+        assert not list(storage.image_dir.glob("*.jpg"))
+
+
+class TestMissingFrame:
+    """12단계가 요청한 프레임을 Vision 이 남기지 않은 경우.
+
+    두 곳이 같은 선정 규칙을 각자 호출하므로 한쪽 인자만 바뀌어도 어긋난다.
+    조용히 빠지면 이미지 없이 분석된 것을 아무도 모른다.
+    """
+
+    async def test_missing_frame_returns_none(self, storage) -> None:
+        load = await build(storage)._image_loader([])
+        assert load(5) is None
+
+    async def test_missing_frame_warns(self, storage, caplog) -> None:
+        with caplog.at_level("WARNING", logger="app.ai.analysis_pipeline"):
+            load = await build(storage)._image_loader([])
+            load(5)
+
+        assert "5" in caplog.text
+
+    async def test_present_frame_warns_nothing(self, storage, caplog) -> None:
+        with caplog.at_level("WARNING", logger="app.ai.analysis_pipeline"):
+            load = await build(storage)._image_loader([_frame(5)])
+            data = load(5)
+
+        assert data
+        assert caplog.text == ""
