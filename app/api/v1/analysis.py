@@ -25,7 +25,7 @@ from app.api.deps import (
     StorageDep,
     video_file,
 )
-from app.core.constants import MAX_QUEUE_SIZE, PAGE_SIZE_DEFAULT, PAGE_SIZE_MAX
+from app.core.constants import PAGE_SIZE_DEFAULT, PAGE_SIZE_MAX
 from app.core.exceptions import ErrorCode, PetFitError
 from app.schemas.analysis import (
     AnalysisAccepted,
@@ -59,8 +59,11 @@ def _reject_if_queue_full(queue: QueueDep) -> None:
     작업을 등록하는 시점에도 `submit()` 이 같은 검사를 한다. 그런데 그때는
     이미 영상을 저장하고 행을 만든 뒤라, 되돌리는 비용이 크다. 먼저 확인해서
     대부분의 경우 아무것도 만들지 않고 끝낸다.
+
+    판정은 큐에게 묻는다. 여기서 상수와 직접 비교하면 큐가 다른 용량으로
+    만들어졌을 때 사전 검사와 `submit()` 의 결과가 달라진다.
     """
-    if queue.size >= MAX_QUEUE_SIZE:
+    if queue.is_full:
         raise PetFitError(ErrorCode.QUEUE_FULL)
 
 

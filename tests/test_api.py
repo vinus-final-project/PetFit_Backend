@@ -30,7 +30,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # no
 
 from app.ai.stub import StubPipeline  # noqa: E402
 from app.api.deps import get_db  # noqa: E402
-from app.core.constants import MAX_QUEUE_SIZE  # noqa: E402
 from app.core.exceptions import ErrorCode, PetFitError  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.schemas.enums import AnalysisStatus, AnimalGroup, SpaceType  # noqa: E402
@@ -84,8 +83,12 @@ class FakeQueue:
         self.fail_submit = False
 
     @property
+    def is_full(self) -> bool:
+        return self.full
+
+    @property
     def size(self) -> int:
-        return MAX_QUEUE_SIZE if self.full else 0
+        return 1 if self.full else 0
 
     def submit(self, analysis_id, video_path, group, space) -> None:
         if self.full or self.fail_submit:

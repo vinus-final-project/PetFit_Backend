@@ -76,6 +76,16 @@ class AnalysisQueue:
         """대기·처리 중인 작업 수."""
         return self._pending
 
+    @property
+    def is_full(self) -> bool:
+        """새 작업을 받을 수 없는 상태인지.
+
+        용량 판정을 큐 안에 둔다. 호출자가 `size` 와 상수를 직접 비교하면
+        인스턴스마다 다른 `capacity` 를 무시하게 되어, 사전 검사와 `submit()` 의
+        판정이 어긋난다.
+        """
+        return self._pending >= self._capacity
+
     def submit(
         self,
         analysis_id: int,
@@ -88,7 +98,7 @@ class AnalysisQueue:
         Raises:
             PetFitError: 대기열이 가득 찬 경우 503.
         """
-        if self._pending >= self._capacity:
+        if self.is_full:
             raise PetFitError(ErrorCode.QUEUE_FULL)
 
         self._pending += 1

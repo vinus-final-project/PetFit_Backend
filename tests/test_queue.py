@@ -134,6 +134,28 @@ class TestCapacity:
 
         await queue.drain()
 
+    async def test_is_full_follows_instance_capacity(
+        self, storage, session_factory
+    ) -> None:
+        """용량 판정은 상수가 아니라 인스턴스의 capacity 를 따라야 한다.
+
+        라우터가 영상을 저장하기 전에 이 값을 보고 거절한다. 상수와 어긋나면
+        사전 검사를 통과한 요청이 submit 에서 503으로 떨어지고, 그때는 이미
+        100MB를 디스크에 쓴 뒤다.
+        """
+        queue = build(storage, session_factory, concurrency=1, capacity=2,
+                      pipeline=StubPipeline(speed=0.02))
+        assert queue.is_full is False
+
+        queue.submit(1, VIDEO, AnimalGroup.CAT, SpaceType.BALCONY)
+        assert queue.is_full is False
+
+        queue.submit(2, VIDEO, AnimalGroup.CAT, SpaceType.BALCONY)
+        assert queue.is_full is True
+
+        await queue.drain()
+        assert queue.is_full is False
+
     async def test_slot_frees_after_completion(self, storage, session_factory) -> None:
         queue = build(storage, session_factory, capacity=1)
         queue.submit(1, VIDEO, AnimalGroup.CAT, SpaceType.BALCONY)
