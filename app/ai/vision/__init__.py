@@ -25,7 +25,7 @@ from app.ai.vision.detector import (
     clamp_box,
 )
 from app.ai.vision.pipeline import VisionPipeline
-from app.ai.vision.tracking import IouTracker, Tracker, adopt
+from app.ai.vision.tracking import IouTracker, TrackIdTracker, Tracker, adopt
 
 # ultralytics 를 최상단에서 임포트하지 않으므로 여기서 꺼내도 torch 가 딸려오지 않는다.
 from app.ai.vision.yolo_detector import YoloDetector
@@ -50,6 +50,7 @@ __all__ = [
     "clamp_box",
     "Tracker",
     "IouTracker",
+    "TrackIdTracker",
     "adopt",
     "YoloDetector",
     "VisionPipeline",

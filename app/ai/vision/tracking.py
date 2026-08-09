@@ -36,7 +36,7 @@ from app.core.constants import (
 from app.utils.geometry import iou
 from app.utils.rounding import normalize
 
-__all__ = ["Tracker", "IouTracker", "adopt"]
+__all__ = ["Tracker", "IouTracker", "TrackIdTracker", "adopt"]
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +170,58 @@ class IouTracker:
         for di, det in enumerate(group):
             if di not in taken_dets:
                 tracks.append(_Track(class_code=class_code, detections=[det]))
+
+
+class TrackIdTracker:
+    """탐지기가 붙인 추적 ID로 묶는 추적기.
+
+    ultralytics 의 BoT-SORT 처럼 탐지와 추적을 함께 수행하는 구현을 쓸 때 쓴다.
+    같은 ``(class_code, track_id)`` 를 한 물체로 본다. 추론을 한 번만 하고도
+    추적 결과를 얻는다.
+
+    **ID가 없는 탐지는 IoU 병합으로 넘긴다.** 추적기는 확신하지 못한 탐지에
+    ID를 주지 않는데, 각각을 별개 물체로 두면 10프레임에 걸쳐 잡힌 소파가
+    1프레임짜리 10건이 되고 오탐 필터가 전부 걸러 **물체가 통째로 사라진다.**
+
+    ID를 매기는 것은 탐지기이므로, 이 클래스는 묶기만 한다. 추적 품질을 비교할
+    때는 ``IouTracker`` 와 이 구현을 바꿔 끼운다.
+    """
+
+    def __init__(self, fallback: Tracker | None = None) -> None:
+        """
+        Args:
+            fallback: ID가 없는 탐지를 처리할 추적기. 기본값은 IoU 병합이다.
+        """
+        self._fallback = fallback or IouTracker()
+
+    def track(self, detections: Sequence[Sequence[Detection]]) -> list[TrackedObject]:
+        """추적 ID로 통합한다."""
+        by_id: dict[tuple[str, int], _Track] = {}
+        untracked: list[list[Detection]] = []
+
+        for row in detections:
+            leftover: list[Detection] = []
+            for det in row:
+                if det.track_id is None:
+                    leftover.append(det)
+                    continue
+
+                key = (det.class_code, det.track_id)
+                track = by_id.get(key)
+                if track is None:
+                    track = by_id[key] = _Track(class_code=det.class_code)
+                track.detections.append(det)
+
+            untracked.append(leftover)
+
+        objects = [t.finalize() for t in by_id.values()]
+
+        if any(untracked):
+            recovered = self._fallback.track(untracked)
+            logger.info("추적 ID가 없는 탐지에서 %s건을 복구했다", len(recovered))
+            objects.extend(recovered)
+
+        return objects
 
 
 def adopt(

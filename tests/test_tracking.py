@@ -13,7 +13,7 @@
 
 import pytest
 
-from app.ai.vision.tracking import IouTracker, Tracker, adopt
+from app.ai.vision.tracking import IouTracker, TrackIdTracker, Tracker, adopt
 from app.ai.vision.types import Detection, TrackedObject
 from app.core.constants import ADOPTION_CONFIDENCE, MIN_DETECTION_FRAMES
 from app.utils.geometry import BoundingBox, intersection_area, iou
@@ -190,6 +190,132 @@ class TestThreshold:
 
         rows = [[det(0, a.x, a.y)], [det(1, b.x, b.y)]]
         assert len(IouTracker(threshold=exact).track(rows)) == 1
+
+
+class TestTrackIdTracker:
+    """탐지기가 추적까지 수행한 경우.
+
+    ultralytics 의 BoT-SORT 는 model.track() 안에서 탐지와 추적을 함께 한다.
+    결과의 ID 를 쓰면 추론을 한 번만 하고도 추적 결과를 얻는다.
+    """
+
+    def test_same_id_becomes_one_object(self) -> None:
+        rows = [[Detection("sofa", 0.9, i, 0.1 + i * 0.2, 0.3, 0.2, 0.2, track_id=7)]
+                for i in range(4)]
+        result = TrackIdTracker().track(rows)
+
+        assert len(result) == 1
+        assert result[0].detection_frame_count == 4
+
+    def test_far_apart_boxes_still_merge_by_id(self) -> None:
+        """ID 로 묶으므로 겹침이 전혀 없어도 하나다.
+
+        카메라가 빠르게 움직여 박스가 겹치지 않는 경우가 IoU 병합의 약점이다.
+        """
+        rows = [
+            [Detection("sofa", 0.9, 0, 0.00, 0.0, 0.1, 0.1, track_id=3)],
+            [Detection("sofa", 0.9, 1, 0.85, 0.8, 0.1, 0.1, track_id=3)],
+        ]
+        assert len(TrackIdTracker().track(rows)) == 1
+
+    def test_different_ids_stay_separate(self) -> None:
+        rows = [
+            [
+                Detection("chair", 0.9, 0, 0.30, 0.3, 0.2, 0.2, track_id=1),
+                Detection("chair", 0.9, 0, 0.32, 0.3, 0.2, 0.2, track_id=2),
+            ]
+        ]
+        assert len(TrackIdTracker().track(rows)) == 2
+
+    def test_same_id_different_class_stays_separate(self) -> None:
+        """추적기는 클래스별로 ID 를 매기지 않는다. 번호가 겹칠 수 있다."""
+        rows = [
+            [
+                Detection("sofa", 0.9, 0, 0.1, 0.1, 0.2, 0.2, track_id=1),
+                Detection("carpet", 0.9, 0, 0.1, 0.1, 0.2, 0.2, track_id=1),
+            ]
+        ]
+        result = TrackIdTracker().track(rows)
+
+        assert len(result) == 2
+        assert {o.class_code for o in result} == {"sofa", "carpet"}
+
+    def test_representative_values_follow_the_same_rule(self) -> None:
+        rows = [
+            [Detection("sofa", 0.61, 0, 0.3, 0.3, 0.2, 0.2, track_id=5)],
+            [Detection("sofa", 0.95, 1, 0.3, 0.3, 0.2, 0.2, track_id=5)],
+            [Detection("sofa", 0.72, 2, 0.3, 0.3, 0.2, 0.2, track_id=5)],
+        ]
+        result = TrackIdTracker().track(rows)[0]
+
+        assert result.confidence == 0.95
+        assert result.frame_number == 1
+
+    def test_untracked_detections_fall_back_to_iou(self) -> None:
+        """ID 가 없는 탐지를 각각 별개로 두면 물체가 통째로 사라진다.
+
+        10프레임에 걸쳐 잡힌 소파가 1프레임짜리 10건이 되고, 오탐 필터가
+        전부 걸러낸다.
+        """
+        rows = [[det(i, 0.30, 0.3, code="sofa")] for i in range(10)]
+        result = adopt(TrackIdTracker().track(rows))
+
+        assert len(result) == 1
+        assert result[0].detection_frame_count == 10
+
+    def test_mixed_tracked_and_untracked(self) -> None:
+        rows = [
+            [
+                Detection("sofa", 0.9, i, 0.1, 0.1, 0.2, 0.2, track_id=1),
+                Detection("carpet", 0.9, i, 0.6, 0.6, 0.2, 0.2),
+            ]
+            for i in range(5)
+        ]
+        result = TrackIdTracker().track(rows)
+
+        assert len(result) == 2
+        assert all(o.detection_frame_count == 5 for o in result)
+
+    def test_empty_input(self) -> None:
+        assert TrackIdTracker().track([]) == []
+
+    def test_satisfies_protocol(self) -> None:
+        assert isinstance(TrackIdTracker(), Tracker)
+
+    def test_fallback_is_replaceable(self) -> None:
+        class Never:
+            def track(self, detections):
+                return []
+
+        rows = [[det(0, 0.3, 0.3)]]
+        assert TrackIdTracker(fallback=Never()).track(rows) == []
+
+
+class TestTrackerComparison:
+    """같은 입력을 두 추적기에 넣어 차이를 본다.
+
+    성능평가에서 어느 쪽을 쓸지 정하려면 바꿔 끼울 수 있어야 한다.
+    """
+
+    def _fast_pan(self):
+        """카메라가 빠르게 움직여 박스가 겹치지 않는 경우."""
+        return [
+            [Detection("sofa", 0.9, i, i * 0.25, 0.3, 0.2, 0.2, track_id=1)]
+            for i in range(4)
+        ]
+
+    def test_iou_splits_what_ids_keep_together(self) -> None:
+        rows = self._fast_pan()
+
+        by_iou = IouTracker().track(rows)
+        by_id = TrackIdTracker().track(rows)
+
+        assert len(by_iou) > len(by_id)
+        assert len(by_id) == 1
+
+    def test_both_satisfy_the_same_protocol(self) -> None:
+        for tracker in (IouTracker(), TrackIdTracker()):
+            assert isinstance(tracker, Tracker)
 
 
 class TestAdopt:

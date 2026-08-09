@@ -115,6 +115,15 @@ class Detection:
     width: float
     height: float
 
+    #: 추적 ID. 탐지기가 추적까지 함께 수행한 경우에만 채워진다.
+    #:
+    #: ultralytics 의 BoT-SORT 는 ``model.track()`` 안에서 탐지와 추적을 함께
+    #: 한다. 결과의 ID 를 여기 실어 두면 추론을 한 번만 하고도 추적 결과를 쓸 수
+    #: 있다. 따로 추적하면 같은 프레임을 두 번 추론하게 된다.
+    #:
+    #: 추적기가 확신하지 못한 탐지에는 ID 가 붙지 않으므로 None 일 수 있다.
+    track_id: int | None = None
+
     @property
     def box(self) -> BoundingBox:
         """점유율 계산에 넘길 형태. ``union_area()`` 가 그대로 받는다."""

@@ -14,6 +14,7 @@ from PIL import Image
 from app.ai.vision.types import Frame
 from app.ai.vision.yolo_detector import (
     BATCH_SIZE,
+    DEFAULT_TRACKER,
     MISSING_PACKAGE,
     YoloDetector,
     to_class_code,
@@ -79,6 +80,8 @@ def detector(model, **kwargs) -> YoloDetector:
     instance._device = kwargs.get("device")
     instance._threshold = kwargs.get("threshold", DETECTION_CONFIDENCE)
     instance._batch_size = kwargs.get("batch_size", BATCH_SIZE)
+    instance._tracking = kwargs.get("tracking", False)
+    instance._tracker = kwargs.get("tracker", DEFAULT_TRACKER)
     return instance
 
 
@@ -243,6 +246,84 @@ class TestDetect:
         from app.ai.vision.detector import Detector
 
         assert isinstance(detector(_Model()), Detector)
+
+
+class TestTrackingMode:
+    """추적을 함께 수행하는 모드.
+
+    켜면 추론 한 번으로 탐지와 추적을 모두 얻는다. 따로 추적하면 같은 프레임을
+    두 번 추론하게 되어 처리 시간이 두 배가 된다.
+    """
+
+    class _Tracking(_Model):
+        def __init__(self, ids=None):
+            super().__init__()
+            self.track_calls = []
+            self._ids = ids
+
+        def track(self, image, conf=None, device=None, tracker=None,
+                  persist=None, verbose=None):
+            self.track_calls.append(
+                {"tracker": tracker, "persist": persist, "device": device}
+            )
+            box = [[0.1, 0.1, 0.2, 0.2]]
+            result = _Result(box, [0.9], [57])
+            if self._ids is not None:
+                result.boxes.id = _Column([self._ids])
+            return [result]
+
+    def test_uses_track_not_predict(self) -> None:
+        model = self._Tracking()
+        detector(model, tracking=True).detect(frames(5))
+
+        assert len(model.track_calls) == 5
+        assert model.calls == []
+
+    def test_persists_state_between_frames(self) -> None:
+        """추적기는 프레임을 순서대로 받아 상태를 이어가야 한다.
+
+        persist 가 없으면 호출마다 상태가 초기화되어 ID 가 매 프레임 새로 발급된다.
+        """
+        model = self._Tracking()
+        detector(model, tracking=True).detect(frames(3))
+
+        assert all(c["persist"] is True for c in model.track_calls)
+
+    def test_one_frame_per_call(self) -> None:
+        """여러 장을 한 번에 넘기면 앞뒤 관계가 사라진다."""
+        model = self._Tracking()
+        detector(model, tracking=True, batch_size=8).detect(frames(6))
+
+        assert len(model.track_calls) == 6
+
+    def test_passes_the_tracker_config(self) -> None:
+        model = self._Tracking()
+        detector(model, tracking=True, tracker="bytetrack.yaml").detect(frames(2))
+
+        assert model.track_calls[0]["tracker"] == "bytetrack.yaml"
+
+    def test_default_tracker_is_botsort(self) -> None:
+        model = self._Tracking()
+        detector(model, tracking=True).detect(frames(1))
+
+        assert model.track_calls[0]["tracker"] == DEFAULT_TRACKER
+
+    def test_track_id_reaches_the_detection(self) -> None:
+        model = self._Tracking(ids=42)
+        rows = detector(model, tracking=True).detect(frames(3))
+
+        assert all(row[0].track_id == 42 for row in rows)
+
+    def test_missing_id_is_none(self) -> None:
+        """추적기가 확신하지 못한 탐지에는 ID 가 붙지 않는다."""
+        model = self._Tracking(ids=None)
+        rows = detector(model, tracking=True).detect(frames(3))
+
+        assert all(row[0].track_id is None for row in rows)
+
+    def test_predict_mode_has_no_ids(self) -> None:
+        rows = detector(_Model()).detect(frames(3))
+        assert all(d.track_id is None for row in rows for d in row)
 
 
 class TestMissingPackage:

@@ -19,7 +19,13 @@ from app.ai.vision.types import Detection, Frame
 from app.core.constants import DETECTION_CONFIDENCE
 from app.rules.object_map import is_known
 
-__all__ = ["YoloDetector", "to_detections", "to_class_code", "CLASS_ALIASES"]
+__all__ = [
+    "YoloDetector",
+    "to_detections",
+    "to_class_code",
+    "CLASS_ALIASES",
+    "DEFAULT_TRACKER",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +34,12 @@ logger = logging.getLogger(__name__)
 #: 30장을 한꺼번에 넘기면 1280x720 기준으로 메모리 사용이 크게 튄다. Mac Studio
 #: 한 대에서 동시 2건에 VLM 까지 함께 돌리므로 여유를 둔다.
 BATCH_SIZE = 8
+
+#: 추적기 설정 파일. ultralytics 가 함께 배포한다.
+#:
+#: 1차 성능평가에서 BoT-SORT 를 잠정 선정했으나 중복 제거 정확도가 게이트에
+#: 미달했다. ``bytetrack.yaml`` 로 바꿔 재측정할 수 있다.
+DEFAULT_TRACKER = "botsort.yaml"
 
 #: 모델이 쓰는 클래스명 -> 탐지 대상 코드.
 #:
@@ -100,10 +112,11 @@ def to_detections(
     coords = boxes.xyxyn.tolist()
     confidences = boxes.conf.tolist()
     class_indexes = boxes.cls.tolist()
+    track_ids = _track_ids(boxes, len(confidences))
 
     detections: list[Detection] = []
-    for (x1, y1, x2, y2), confidence, index in zip(
-        coords, confidences, class_indexes
+    for (x1, y1, x2, y2), confidence, index, track_id in zip(
+        coords, confidences, class_indexes, track_ids
     ):
         if confidence < threshold:
             continue
@@ -131,10 +144,23 @@ def to_detections(
                 y=box.y,
                 width=box.width,
                 height=box.height,
+                track_id=track_id,
             )
         )
 
     return detections
+
+
+def _track_ids(boxes, count: int) -> list[int | None]:
+    """추적 ID를 꺼낸다.
+
+    ``predict()`` 결과에는 ``id`` 가 없고, ``track()`` 결과라도 추적기가 확신하지
+    못한 탐지에는 붙지 않는다. 없으면 전부 None 이다.
+    """
+    raw = getattr(boxes, "id", None)
+    if raw is None:
+        return [None] * count
+    return [int(value) for value in raw.tolist()]
 
 
 class YoloDetector:
@@ -150,6 +176,8 @@ class YoloDetector:
         device: str | None = None,
         threshold: float = DETECTION_CONFIDENCE,
         batch_size: int = BATCH_SIZE,
+        tracking: bool = False,
+        tracker: str = DEFAULT_TRACKER,
     ) -> None:
         """모델을 즉시 적재한다.
 
@@ -160,7 +188,10 @@ class YoloDetector:
             weights: 가중치 파일 경로.
             device: ``mps`` · ``cuda`` · ``cpu``. None 이면 자동 선택한다.
             threshold: 프레임 단위 탐지 임계값.
-            batch_size: 한 번에 추론할 프레임 수.
+            batch_size: 한 번에 추론할 프레임 수. 추적 모드에서는 무시된다.
+            tracking: 추적까지 함께 수행할지 여부. 켜면 결과에 ``track_id`` 가
+                실리며 ``TrackIdTracker`` 로 통합할 수 있다.
+            tracker: 추적기 설정 파일. ``botsort.yaml`` 또는 ``bytetrack.yaml``.
 
         Raises:
             RuntimeError: ultralytics 가 설치되어 있지 않은 경우.
@@ -169,15 +200,30 @@ class YoloDetector:
         self._device = device
         self._threshold = threshold
         self._batch_size = max(1, batch_size)
+        self._tracking = tracking
+        self._tracker = tracker
 
     def detect(self, frames: Sequence[Frame]) -> list[list[Detection]]:
-        """프레임 목록을 배치로 나눠 추론한다.
+        """프레임 목록을 추론한다.
 
         블로킹 호출이다. 호출하는 쪽이 스레드에서 실행한다.
         """
         if not frames:
             return []
 
+        rows = self._track(frames) if self._tracking else self._predict(frames)
+
+        # 규약상 프레임 수와 길이가 같아야 한다. 어긋나면 파이프라인이 막지만,
+        # 원인이 여기라는 사실은 남지 않으므로 로그를 남긴다.
+        if len(rows) != len(frames):
+            logger.error(
+                "추론 결과 수가 프레임 수와 다르다: %s != %s", len(rows), len(frames)
+            )
+
+        return rows
+
+    def _predict(self, frames: Sequence[Frame]) -> list[list[Detection]]:
+        """배치로 나눠 추론한다. 추적하지 않는다."""
         rows: list[list[Detection]] = []
         for chunk in _batched(frames, self._batch_size):
             results = self._model.predict(
@@ -190,14 +236,29 @@ class YoloDetector:
                 to_detections(result, frame.number, self._threshold)
                 for frame, result in zip(chunk, results)
             )
+        return rows
 
-        # 규약상 프레임 수와 길이가 같아야 한다. 어긋나면 파이프라인이 막지만,
-        # 원인이 여기라는 사실은 남지 않으므로 로그를 남긴다.
-        if len(rows) != len(frames):
-            logger.error(
-                "추론 결과 수가 프레임 수와 다르다: %s != %s", len(rows), len(frames)
+    def _track(self, frames: Sequence[Frame]) -> list[list[Detection]]:
+        """추적까지 함께 수행한다.
+
+        **배치를 쓰지 않는다.** 추적기는 프레임을 순서대로 하나씩 받아 상태를
+        이어가야 한다. 여러 장을 한 번에 넘기면 앞뒤 관계가 사라져 ID가 매 프레임
+        새로 발급된다. ``persist=True`` 가 호출 사이의 상태를 유지한다.
+
+        배치를 못 쓰므로 ``predict`` 보다 느리다. 추적 품질과 속도의 교환이며,
+        어느 쪽이 나은지는 성능평가에서 정한다.
+        """
+        rows: list[list[Detection]] = []
+        for frame in frames:
+            results = self._model.track(
+                frame.image,
+                conf=self._threshold,
+                device=self._device,
+                tracker=self._tracker,
+                persist=True,
+                verbose=False,
             )
-
+            rows.append(to_detections(results[0], frame.number, self._threshold))
         return rows
 
 

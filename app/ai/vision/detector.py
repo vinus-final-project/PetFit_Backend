@@ -101,6 +101,9 @@ class PlantedObject:
     confidence: float = 0.90
     confidence_by_frame: Mapping[int, float] = field(default_factory=dict)
     jitter: float = 0.0
+    #: 추적 ID. 지정하면 탐지기가 추적까지 수행한 것처럼 동작한다.
+    #: ``TrackIdTracker`` 를 모델 없이 시험할 때 쓴다.
+    track_id: int | None = None
 
     def confidence_at(self, frame_number: int) -> float:
         """해당 프레임의 confidence."""
@@ -206,6 +209,7 @@ class StubDetector:
                         y=box.y,
                         width=box.width,
                         height=box.height,
+                        track_id=planted.track_id,
                     )
                 )
 
