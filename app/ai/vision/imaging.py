@@ -21,9 +21,8 @@ from dataclasses import dataclass
 from PIL import ImageDraw
 from PIL.Image import Image
 
-from app.ai.pipeline import DetectedObject
+from app.ai.pipeline import DetectedObject, select_analysis_frames
 from app.ai.vision.types import Detection, Frame, ImageSink, TrackedObject
-from app.core.constants import LLM_MAX_IMAGES
 from app.rules.object_map import PRIMARY_OBJECTS, to_korean
 from app.rules.risk_rules import classify
 from app.schemas.enums import AnimalGroup, RiskLevel
@@ -229,28 +228,12 @@ def _frames_for_analysis(
 ) -> list[Frame]:
     """환경 분석에 넘길 원본 프레임을 고른다.
 
-    분석 대표 1장에 위험 객체 대표를 더해 최대 ``LLM_MAX_IMAGES`` 장이다.
-    **마킹하지 않은 원본이어야 한다.** 박스가 그려진 이미지를 넣으면 모델이
-    이미 탐지된 객체를 다시 서술하게 되어, 탐지 대상 밖의 위험 요소를 찾는다는
-    목적이 사라진다.
+    **선정 규칙은 `app.ai.pipeline` 에 있다.** 12단계가 같은 규칙으로 보낼
+    프레임을 정하므로, 여기서 따로 구현하면 한쪽만 고쳐졌을 때 요청한 프레임이
+    없어 이미지가 조용히 빠진다. 여기서는 번호를 실제 프레임으로 바꾸기만 한다.
 
-    같은 프레임을 두 번 넣지 않는다. 장수 상한을 중복으로 채우면 그만큼 다른
-    장면을 보지 못한다.
+    **마킹하지 않은 원본이다.** 박스가 그려진 이미지를 넣으면 모델이 이미 탐지된
+    객체를 다시 서술하게 되어, 탐지 대상 밖의 위험 요소를 찾는다는 목적이 사라진다.
     """
-    picked = [analysis_frame]
-    seen = {analysis_frame.number}
-
-    for obj in detected:
-        if len(picked) >= LLM_MAX_IMAGES:
-            break
-        if obj.risk is RiskLevel.SAFE or obj.frame_number in seen:
-            continue
-
-        frame = by_number.get(obj.frame_number)
-        if frame is None:
-            continue
-
-        picked.append(frame)
-        seen.add(obj.frame_number)
-
-    return picked
+    numbers = select_analysis_frames(analysis_frame.number, detected)
+    return [by_number[n] for n in numbers if n in by_number]

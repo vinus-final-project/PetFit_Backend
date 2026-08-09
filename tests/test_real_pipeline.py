@@ -207,10 +207,11 @@ class TestImages:
             assert (255, 0, 0) not in colors
 
     async def test_frame_selection_rules_agree(self, storage, scene, stages) -> None:
-        """Vision 과 12단계가 같은 규칙을 각자 구현하고 있다.
+        """Vision 이 남긴 프레임과 12단계가 요청하는 프레임이 같아야 한다.
 
-        한쪽만 고쳐지면 요청한 프레임이 없어 이미지가 조용히 빠진다.
-        규칙이 갈라지는 순간 이 테스트가 실패한다.
+        규칙은 ``pipeline.select_analysis_frames()`` 하나로 통합되어 있으므로
+        지금은 갈라질 수 없다. 어느 한쪽이 다시 직접 구현하면 이 테스트가 잡는다.
+        요청한 프레임이 없으면 이미지가 조용히 빠져 관찰 근거가 사라진다.
         """
         vision = VisionPipeline(StubDetector(), storage)
         result = await vision.run(scene, GROUP, stages)

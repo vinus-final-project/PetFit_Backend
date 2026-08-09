@@ -16,7 +16,7 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from app.ai.pipeline import DetectedObject
+from app.ai.pipeline import DetectedObject, select_analysis_frames
 from app.ai.score_generator import PetFitScore
 from app.ai.validation import (
     MAX_ANALYSIS,
@@ -26,8 +26,7 @@ from app.ai.validation import (
     MIN_RECOMMENDATIONS,
     Rejection,
 )
-from app.core.constants import LLM_MAX_IMAGES
-from app.schemas.enums import AnimalGroup, RiskLevel, SpaceType
+from app.schemas.enums import AnimalGroup, SpaceType
 from app.utils.rounding import normalize
 
 __all__ = [
@@ -527,8 +526,9 @@ def _ordered(objects: Sequence[DetectedObject]) -> list[DetectedObject]:
 def select_image_frames(context: AnalysisContext) -> tuple[int, ...]:
     """함께 보낼 원본 프레임 번호를 고른다.
 
-    분석 대표 프레임 1장에 위험 객체의 대표 프레임을 위험도 순으로 채운다.
-    같은 프레임이 여러 번 선택되면 한 번만 보낸다.
+    **선정 규칙은 `app.ai.pipeline` 에 있다.** Vision 이 같은 규칙으로 프레임을
+    남기므로, 여기서 따로 구현하면 한쪽만 고쳐졌을 때 요청한 프레임이 없어
+    이미지가 조용히 빠진다.
 
     **마킹하지 않은 원본을 보낸다.** Bounding Box를 그린 이미지를 보내면 모델이
     표시된 객체에만 주목하여 그 외의 위험 요소를 놓친다. 탐지 대상 12종 밖의
@@ -537,15 +537,4 @@ def select_image_frames(context: AnalysisContext) -> tuple[int, ...]:
     Returns:
         프레임 번호. 최대 `LLM_MAX_IMAGES` 개이며 중복이 없다.
     """
-    risky = sorted(
-        (o for o in context.objects if o.risk is not RiskLevel.SAFE),
-        key=lambda o: (-o.risk.rank, -o.confidence, o.frame_number),
-    )
-
-    frames: list[int] = []
-    for number in (context.thumbnail_frame, *(o.frame_number for o in risky)):
-        if number not in frames:
-            frames.append(number)
-        if len(frames) == LLM_MAX_IMAGES:
-            break
-    return tuple(frames)
+    return select_analysis_frames(context.thumbnail_frame, context.objects)

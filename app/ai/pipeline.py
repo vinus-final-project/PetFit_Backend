@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from app.core.constants import LLM_MAX_IMAGES
 from app.schemas.enums import (
     AnalysisStage,
     AnimalGroup,
@@ -36,6 +37,7 @@ __all__ = [
     "StageCallback",
     "Pipeline",
     "PipelineError",
+    "select_analysis_frames",
 ]
 
 
@@ -130,6 +132,47 @@ class PipelineResult:
     def marked_image_paths(self) -> list[str]:
         """생성된 마킹 이미지 경로. 삭제·재시도 시 정리 대상이다."""
         return [o.marked_image_path for o in self.detected_objects if o.marked_image_path]
+
+
+def select_analysis_frames(
+    thumbnail_frame: int,
+    objects: Sequence[DetectedObject],
+    limit: int = LLM_MAX_IMAGES,
+) -> tuple[int, ...]:
+    """환경 분석에 함께 보낼 원본 프레임 번호를 고른다.
+
+    **이 규칙을 쓰는 곳이 둘이다.** Vision(9·10단계)은 고른 프레임을 실제로
+    들고 있어야 하고, 환경 분석(12단계)은 그중 무엇을 보낼지 정해야 한다.
+    각자 구현하면 한쪽만 고쳐졌을 때 요청한 프레임이 없어 이미지가 조용히 빠진다.
+    양쪽이 이미 이 모듈에 의존하므로 여기에 둔다.
+
+    분석 대표 프레임 1장에 위험 객체의 대표 프레임을 위험도 순으로 채운다.
+    ``SAFE`` 는 넣지 않는다. 탐지 대상 12종 밖의 위험 요소를 찾는 것이 이미지를
+    보내는 이유이므로, 위험 판정이 붙은 장면을 우선 보낸다.
+
+    같은 프레임을 두 번 넣지 않는다. 중복으로 상한을 채우면 그만큼 다른 장면을
+    보지 못한다.
+
+    Args:
+        thumbnail_frame: 분석 대표 프레임 번호. 항상 첫 번째로 들어간다.
+        objects: 채택된 객체. 위험도와 confidence 가 채워져 있어야 한다.
+        limit: 최대 장수.
+
+    Returns:
+        프레임 번호. 중복이 없으며 ``limit`` 을 넘지 않는다.
+    """
+    risky = sorted(
+        (o for o in objects if o.risk is not RiskLevel.SAFE),
+        key=lambda o: (-o.risk.rank, -o.confidence, o.frame_number),
+    )
+
+    numbers: list[int] = []
+    for number in (thumbnail_frame, *(o.frame_number for o in risky)):
+        if number not in numbers:
+            numbers.append(number)
+        if len(numbers) == limit:
+            break
+    return tuple(numbers)
 
 
 #: 단계 진입을 알리는 콜백.

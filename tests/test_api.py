@@ -32,7 +32,7 @@ from app.ai.stub import StubPipeline  # noqa: E402
 from app.api.deps import get_db  # noqa: E402
 from app.core.exceptions import ErrorCode, PetFitError  # noqa: E402
 from app.main import create_app  # noqa: E402
-from app.schemas.enums import AnalysisStatus, AnimalGroup, SpaceType  # noqa: E402
+from app.schemas.enums import AnimalGroup, SpaceType  # noqa: E402
 from app.services.analysis_service import AnalysisService  # noqa: E402
 from app.services.storage import Storage, VideoInfo  # noqa: E402
 from tests.conftest import sqlite_metadata  # noqa: E402

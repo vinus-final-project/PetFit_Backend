@@ -16,7 +16,7 @@
 """
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from app.ai.llm.base import VisionLLM
