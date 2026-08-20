@@ -11,6 +11,7 @@
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -19,9 +20,14 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.ai.analysis_pipeline import AnalysisPipeline
+from app.ai.environment_analysis import EnvironmentAnalyzer
+from app.ai.llm import FakeLLM
+from app.ai.pipeline import Pipeline
 from app.ai.stub import StubPipeline
+from app.ai.vision import VisionPipeline, YoloDetector
 from app.api.v1 import api_router
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.exceptions import ErrorCode, PetFitError
 from app.db.session import session_scope
 from app.services.analysis_service import AnalysisService
@@ -50,6 +56,52 @@ def _error_response(error: PetFitError) -> JSONResponse:
     )
 
 
+def _build_pipeline(settings: Settings, storage: Storage) -> Pipeline:
+    """분석 파이프라인을 만든다. **세 담당의 산출물이 만나는 유일한 지점이다.**
+
+    가중치 파일이 있으면 실제 모델을, 없으면 스텁을 쓴다. 이렇게 갈라 두는 이유는
+    **모델 없이도 전 구간이 돌아가야 하기 때문이다.** API·서비스 담당은 torch 를
+    설치하지 않고(1~2GB) 작업하고, 모델은 서버 장비에만 둔다.
+
+    가중치가 있는데 ultralytics 가 없으면 여기서 예외가 올라와 서버가 뜨지 않는다.
+    의도한 동작이다. 첫 분석 요청에서 실패하면 사용자에게는 그냥 분석 실패로 보이고
+    원인이 설정 문제라는 사실이 드러나지 않는다.
+
+    Args:
+        settings: 애플리케이션 설정.
+        storage: 이미지 저장소.
+
+    Returns:
+        `Pipeline` 규약을 만족하는 객체.
+    """
+    weights = Path(settings.yolo_model_path)
+
+    if not weights.is_file():
+        logger.warning(
+            "가중치가 없어 StubPipeline 으로 기동한다. 점수와 위험요소는 "
+            "형식만 맞는 가짜 값이다. 경로: %s",
+            weights,
+        )
+        return StubPipeline()
+
+    detector = YoloDetector(weights, device=settings.yolo_device)
+    vision = VisionPipeline(detector, storage)
+
+    # 환경 분석(12단계) 모델 교체 지점.
+    # 실제 모델을 붙일 때는 아래 한 줄만 바꾼다.
+    #     from app.ai.llm.qwen_mlx import QwenMLX
+    #     analyzer = EnvironmentAnalyzer(QwenMLX())
+    # 4bit 양자화본이 20GB 다. 탐지 검증이 끝난 뒤에 교체한다.
+    analyzer = EnvironmentAnalyzer(FakeLLM())
+
+    logger.info(
+        "실제 파이프라인으로 기동한다. 가중치 %s, 장치 %s, 환경분석 FakeLLM",
+        weights,
+        settings.yolo_device or "자동 선택",
+    )
+    return AnalysisPipeline(vision, analyzer, storage)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """시작 시 큐를 준비하고 중단된 분석을 정리한다.
@@ -60,9 +112,7 @@ async def lifespan(app: FastAPI):
     """
     storage: Storage = app.state.storage
 
-    # 파이프라인 교체 지점. 실제 구현이 완성되면 이 한 줄만 바꾼다.
-    # API·서비스·DB·프론트는 수정하지 않는다.
-    app.state.queue = AnalysisQueue(StubPipeline(), storage)
+    app.state.queue = AnalysisQueue(_build_pipeline(get_settings(), storage), storage)
 
     try:
         async with session_scope() as session:

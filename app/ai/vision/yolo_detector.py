@@ -43,11 +43,18 @@ DEFAULT_TRACKER = "botsort.yaml"
 
 #: 모델이 쓰는 클래스명 -> 탐지 대상 코드.
 #:
-#: COCO 사전학습 가중치는 우리 코드와 다른 이름을 쓴다. 커스텀 학습본은 우리
-#: 이름을 그대로 내므로 이 표를 거쳐도 값이 바뀌지 않는다.
+#: COCO 사전학습 가중치는 우리 코드와 다른 이름을 쓴다. 커스텀 학습본도
+#: 학습 시 붙인 이름을 그대로 내므로, 우리 코드와 다르면 여기서 맞춘다.
+#:
+#: **매핑되지 않은 코드는 `rules/object_map.py` 의 `is_known()` 에서 오류 없이
+#: 버려진다.** 탐지는 잘 되는데 결과에만 안 나타나므로 원인을 찾기 어렵다.
+#: 가중치를 교체할 때는 클래스명을 `OBJECT_NAMES` 와 반드시 대조한다.
 CLASS_ALIASES: dict[str, str] = {
     "couch": "sofa",
     "dining_table": "table",
+    # petfit_v1.pt 는 급식기를 `bowl` 로 학습했다. 급수기(`water_dispenser`)는
+    # 별도 클래스이므로 이 `bowl` 은 사료 그릇만 가리킨다.
+    "bowl": "feeder",
 }
 
 #: ultralytics 미설치 안내.
