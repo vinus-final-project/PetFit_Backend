@@ -1,0 +1,48 @@
+# Homebrew MySQL 8.0 설정 추가분
+#
+# 붙여넣을 파일 (Apple Silicon)
+#   /opt/homebrew/etc/my.cnf
+#
+# 경로 확인
+#   brew --prefix mysql@8.0
+#   mysql --help | grep -A1 "Default options"
+#
+# 수정 후 반드시 재시작한다.
+#   brew services restart mysql@8.0
+
+[mysqld]
+
+# --- 접속 범위 ----------------------------------------------------------
+# 루프백에만 바인딩한다. 외부 노출은 Cloudflare Tunnel 이 담당하고,
+# cloudflared 는 같은 장비의 127.0.0.1:3306 으로 붙는다.
+# 0.0.0.0 으로 열면 같은 공유기의 다른 기기가 터널·인증을 건너뛰고 직접 붙는다.
+bind-address = 127.0.0.1
+
+# --- 문자셋 -------------------------------------------------------------
+# 한글 객체명과 이모지를 저장하므로 utf8mb4 가 필수다.
+# scripts/init_db.py 가 스키마를 utf8mb4_unicode_ci 로 만들고 검증한다.
+character-set-server = utf8mb4
+collation-server     = utf8mb4_unicode_ci
+
+# --- 타임존 -------------------------------------------------------------
+# 서버 기본값을 KST 로 고정한다.
+#
+# 앱은 연결마다 SET time_zone = '+09:00' 을 보내므로(app/db/session.py 의
+# CONNECT_ARGS) 앱 경로만 보면 이 줄이 없어도 된다. 그러나 팀원이 DBeaver 나
+# mysql CLI 로 직접 붙어 INSERT 하면 그 세션은 서버 기본값을 따른다.
+# 고정하지 않으면 같은 테이블에 9시간 어긋난 행이 섞이고, 오류는 나지 않는다.
+#
+# 오프셋 표기라 타임존 테이블(mysql_tzinfo_to_sql) 적재가 필요 없다.
+default-time-zone = '+09:00'
+
+# --- 인증 ---------------------------------------------------------------
+# MySQL 8.0 기본값은 caching_sha2_password 다. requirements.txt 의
+# cryptography 가 이 방식을 처리하므로 앱은 그대로 붙는다.
+# 구버전 GUI 클라이언트가 붙지 못하면 그 계정만 개별적으로 낮춘다.
+# default_authentication_plugin 을 서버 전역으로 바꾸지 않는다.
+
+[client]
+default-character-set = utf8mb4
+
+[mysql]
+default-character-set = utf8mb4

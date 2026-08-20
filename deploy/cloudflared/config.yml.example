@@ -1,0 +1,49 @@
+# Cloudflare Named Tunnel 설정 견본
+#
+# 실제 파일 위치
+#   ~/.cloudflared/config.yml
+#
+# 이 견본을 복사한 뒤 <> 부분을 채운다.
+#   cp deploy/cloudflared/config.yml.example ~/.cloudflared/config.yml
+#
+# 검증
+#   cloudflared tunnel ingress validate
+#   cloudflared tunnel ingress rule https://api.<도메인>/analysis
+
+# `cloudflared tunnel create petfit` 이 출력한 UUID.
+# 이름(petfit)으로도 되지만 UUID 가 명확하다. 목록은 `cloudflared tunnel list`.
+tunnel: <TUNNEL_UUID>
+
+# create 시 생성된 자격 파일. 이 파일이 곧 터널의 비밀키다.
+# 저장소에 올리지 않고, 슬랙·메일로 보내지 않는다.
+credentials-file: /Users/dayeon/.cloudflared/<TUNNEL_UUID>.json
+
+loglevel: info
+transport-loglevel: warn
+
+# ingress 는 위에서부터 순서대로 평가된다. 마지막 catch-all 은 필수다.
+ingress:
+  # --- API 서버 --------------------------------------------------------
+  - hostname: api.<도메인>
+    service: http://127.0.0.1:8000
+    originRequest:
+      # 업로드 100MB 가 느린 회선에서 통과할 시간을 준다.
+      connectTimeout: 30s
+      # 분석은 폴링 구조라 개별 요청은 짧다. 긴 응답 대기는 없다.
+      # 다만 Cloudflare 엣지 자체가 100초에서 524 를 내므로,
+      # 응답이 100초를 넘는 엔드포인트를 새로 만들지 않는다.
+      noTLSVerify: false
+
+  # --- MySQL -----------------------------------------------------------
+  # tcp:// 로 열린 호스트네임은 브라우저로 열리지 않는다.
+  # 팀원은 `cloudflared access tcp` 로 자기 PC 포트에 연결해서 쓴다.
+  #
+  # **이 호스트네임에는 Cloudflare Access 정책을 반드시 건다.**
+  # 정책 없이 두면 주소를 아는 누구나 3306 에 붙는다. MySQL 비밀번호 하나만
+  # 남는데, 그건 인터넷에 노출된 DB 를 지키는 수단이 못 된다.
+  - hostname: db.<도메인>
+    service: tcp://127.0.0.1:3306
+
+  # --- catch-all -------------------------------------------------------
+  # 위 어디에도 걸리지 않은 요청. 없으면 cloudflared 가 뜨지 않는다.
+  - service: http_status:404

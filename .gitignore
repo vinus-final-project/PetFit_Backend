@@ -15,3 +15,7 @@ models/*.pt
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+
+# 배포
+deploy/cloudflared/config.yml
+deploy/cloudflared/*.json
